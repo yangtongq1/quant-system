@@ -1,0 +1,34 @@
+# 全局配置（代码不硬编码，运行时从本文件加载）
+# 敏感信息（SuperMind 账号、API key）不写这里，放环境变量，这里只放引用名
+
+data:
+  db_path: data/quant.db
+  bars_dir: data/bars
+  knowledge_db: knowledge/knowledge.db
+  sources_yaml: knowledge/sources.yaml
+
+cost:                       # A 股交易成本
+  commission_rate: 0.00025  # 佣金 万 2.5
+  min_commission: 5.0       # 最低佣金
+  stamp_tax_rate: 0.0005    # 印花税 0.05%（卖出）
+  transfer_fee_rate: 0.00001  # 过户费 0.001%（双边）
+  slippage: 0.001           # 滑点
+
+strategy:                   # 跨资产对冲配置
+  base_weights:             # 基准权重 6:2:2
+    stock: 0.6
+    gold: 0.2
+    nasdaq: 0.2
+  lambda_risk: 0.5          # 风险档位 λ（0.1 稳健 / 0.5 平衡 / 0.9 进取）
+  stock_universe: 100       # 股票池 top N
+
+risk:                       # 风控阈值
+  max_position_pct: 0.20    # 单标的持仓上限
+  max_drawdown: 0.20        # 组合最大回撤硬约束
+  max_single_weight: 0.02   # 单只个股权重上限
+
+supermind:
+  account_env: SUPERMIND_ACCOUNT  # 模拟资金账号的环境变量名
+
+llm:
+  api_key_env: ZHIPU_API_KEY      # 智谱 GLM API key 的环境变量名

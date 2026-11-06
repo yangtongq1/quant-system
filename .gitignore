@@ -1,0 +1,18 @@
+# 数据与生成产物（不入库，体积大且可再生）
+data/bars/*.parquet
+data/quant.db
+data/quant.db-journal
+knowledge/*.db
+logs/*.log
+report/*.png
+report/*.csv
+report/*.json
+report/qa/
+report/screenshot_*.png
+__pycache__/
+*.pyc
+.pytest_cache/
+.streamlit/secrets.toml
+*.egg-info/
+.venv/
+venv/

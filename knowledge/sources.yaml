@@ -1,0 +1,48 @@
+# 知识板块 RSS 源清单（免费源）
+# category: 财经 / 宏观
+# 付费墙源（Bloomberg/WSJ/FT/Seeking Alpha）已按需求排除
+#
+# 说明：
+# 1. 这些是国外源，需代理访问（用户本机有 Clash 节点）。
+# 2. 开发环境（无代理）实测仅 CNBC 稳定可用；其余源在用户代理环境需二次验证，
+#    403/404 可能是反爬或 URL 失效，需按实际情况增删换源。
+sources:
+  - name: BBC Business
+    url: http://feeds.bbci.co.uk/news/business/rss.xml
+    category: 财经
+    lang: en
+
+  - name: CNBC Top News
+    url: https://www.cnbc.com/id/100003114/device/rss/rss.html
+    category: 财经
+    lang: en
+
+  - name: MarketWatch Top Stories
+    url: http://feeds.marketwatch.com/marketwatch/topstories/
+    category: 财经
+    lang: en
+
+  - name: CNN Business
+    url: http://rss.cnn.com/rss/money_latest.rss
+    category: 财经
+    lang: en
+
+  - name: Yahoo Finance
+    url: https://finance.yahoo.com/news/rssindex
+    category: 财经
+    lang: en
+
+  - name: Fortune
+    url: https://fortune.com/feed/
+    category: 财经
+    lang: en
+
+  - name: IMF News
+    url: https://www.imf.org/en/News/RSS
+    category: 宏观
+    lang: en
+
+  - name: 世界经济论坛
+    url: https://www.weforum.org/agenda/feed/
+    category: 宏观
+    lang: en
