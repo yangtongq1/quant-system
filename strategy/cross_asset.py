@@ -237,7 +237,7 @@ class CrossAssetStrategy(Strategy):
         self._adjust_position(context, self.nasdaq_code, nasdaq_value, date)
 
         for code in target_stocks:
-            self._adjust_position(context, code, per_stock_value, date)
+            self._adjust_position(context, code, per_stock_value, date, band=0.005)
 
         # 5. 清仓跌出股票池的持仓
         self._cleanup_dropped(context, set(target_stocks), date)
@@ -404,8 +404,13 @@ class CrossAssetStrategy(Strategy):
         return top_codes
 
     # ------------------------------------------------------------------
-    def _adjust_position(self, context: Context, code: str, target_value: float, date):
-        """调仓到目标市值（差额 → 100 股整数），带再平衡阈值。"""
+    def _adjust_position(self, context: Context, code: str, target_value: float, date,
+                        band: float = 0.02):
+        """调仓到目标市值（差额 → 100 股整数），带再平衡阈值。
+
+        band: 最小调仓阈值（占总资产比例）。ETF 端 2% 控制换手；
+        股票端由调用方传 0.005（30 只等权时单股市值 ~1.6%，2% 会全被跳过）。
+        """
         price = self._latest_price(code)
         if price is None or price <= 0:
             return
@@ -413,9 +418,9 @@ class CrossAssetStrategy(Strategy):
         cur_value = pos["market_value"] if pos else 0.0
 
         diff = target_value - cur_value
-        # 最小调仓阈值：偏离小于 2% 总资产不调（控制换手）
+        # 最小调仓阈值：偏离小于 band × 总资产不调（控制换手）
         total = context.portfolio["total_asset"]
-        if abs(diff) < 0.02 * total:
+        if abs(diff) < band * total:
             return
 
         lots = int(abs(diff) / price / 100) * 100

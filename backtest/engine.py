@@ -71,7 +71,7 @@ class BacktestEngine:
                 rec["code"] = code
                 bars_by_date[rec["date"]][code] = rec
 
-        ctx = Context(broker=self.broker)
+        ctx = Context(broker=self.broker, defer_execution=True)
         self.strategy.init(ctx)
 
         # 待执行信号队列：{(code, side): (price, volume)}，T 日收盘生成，T+1 开盘成交
