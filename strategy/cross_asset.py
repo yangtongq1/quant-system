@@ -226,7 +226,15 @@ class CrossAssetStrategy(Strategy):
         # 2. 股票端：多因子打分选股
         target_stocks = self.select_stocks(date)
         stock_budget = total * weights["stock"]
-        per_stock_value = stock_budget / max(len(target_stocks), 1)
+        # 等权预算：先按目标池均分
+        per_stock = stock_budget / max(len(target_stocks), 1)
+        # 「买得起 1 手」过滤：高价股 1 手市值超单只预算时整只剔除，
+        # 防止资金闲置（如预算 3000 元/只而 1 手 5 万元的高价股买不起）
+        affordable = [c for c in target_stocks
+                      if (p := self._latest_price(c)) and p * 100 <= per_stock * 1.5]
+        if len(affordable) < max(self.top_n // 2, 5):
+            affordable = target_stocks  # 过滤后过少则退回原池，避免空仓
+        per_stock_value = stock_budget / max(len(affordable), 1)
 
         # 3. 黄金/纳指目标市值
         gold_value = total * weights["gold"]
@@ -236,7 +244,7 @@ class CrossAssetStrategy(Strategy):
         self._adjust_position(context, self.gold_code, gold_value, date)
         self._adjust_position(context, self.nasdaq_code, nasdaq_value, date)
 
-        for code in target_stocks:
+        for code in affordable:
             self._adjust_position(context, code, per_stock_value, date, band=0.005)
 
         # 5. 清仓跌出股票池的持仓
@@ -408,8 +416,8 @@ class CrossAssetStrategy(Strategy):
                         band: float = 0.02):
         """调仓到目标市值（差额 → 100 股整数），带再平衡阈值。
 
-        band: 最小调仓阈值（占总资产比例）。ETF 端 2% 控制换手；
-        股票端由调用方传 0.005（30 只等权时单股市值 ~1.6%，2% 会全被跳过）。
+        band: 最小调仓阈值（占单只持仓目标/当前市值比例，控制换手）。
+        ETF 端 2%；股票端调用方传 0.005。
         """
         price = self._latest_price(code)
         if price is None or price <= 0:
@@ -418,9 +426,9 @@ class CrossAssetStrategy(Strategy):
         cur_value = pos["market_value"] if pos else 0.0
 
         diff = target_value - cur_value
-        # 最小调仓阈值：偏离小于 band × 总资产不调（控制换手）
-        total = context.portfolio["total_asset"]
-        if abs(diff) < band * total:
+        # 最小调仓阈值：相对 max(目标, 当前) 持仓市值（而非总资产）。
+        # 若按总资产算，小市值分仓（如单只 3000 元）会被整体跳过 → 结构性空仓。
+        if abs(diff) < band * max(target_value, cur_value, 1.0):
             return
 
         lots = int(abs(diff) / price / 100) * 100
