@@ -74,14 +74,47 @@ st.plotly_chart(monthly_heatmap(eq), use_container_width=True,
 
 st.divider()
 
-# ── λ 三档对比（全池回测实测结果）──
-st.markdown('<div class="panel-title">λ RISK DIALS / 风险档位对比（全池实测）</div>',
+# ── λ 三档对比（读 report/runs/ 真实运行归档）──
+st.markdown('<div class="panel-title">λ RISK DIALS / 风险档位对比（真实运行归档）</div>',
             unsafe_allow_html=True)
-lam_results = {
-    "0.1": {"total_return": 0.4146, "max_drawdown": -0.2093, "sharpe": 0.521, "trades": 26},
-    "0.5": {"total_return": 0.5676, "max_drawdown": -0.2311, "sharpe": 0.573, "trades": 75},
-    "0.9": {"total_return": 0.7636, "max_drawdown": -0.2545, "sharpe": 0.622, "trades": 106},
-}
+
+
+@st.cache_data(ttl=60)
+def load_lambda_runs() -> dict:
+    """从 report/runs/ 读 cross_asset 运行归档，按 λ 取每个档位最新一次。"""
+    import json
+
+    runs_dir = ROOT / "report" / "runs"
+    if not runs_dir.exists():
+        return {}
+    by_lam: dict = {}
+    for run_dir in sorted(runs_dir.iterdir()):
+        meta_file = run_dir / "run.json"
+        if not meta_file.is_dir() and not meta_file.exists():
+            continue
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if meta.get("strategy") != "cross_asset" or meta.get("lam") is None:
+            continue
+        lam = meta["lam"]
+        # 同档位取最新（目录名含时间戳，字典序即时间序）
+        if lam not in by_lam or run_dir.name > by_lam[lam]["_dir"]:
+            by_lam[lam] = {
+                "_dir": run_dir.name, "total_return": meta.get("total_return"),
+                "max_drawdown": meta.get("max_drawdown"), "sharpe": meta.get("sharpe"),
+                "trades": meta.get("n_trades"), "n_assets": meta.get("n_assets"),
+                "annual_return": meta.get("annual_return"),
+            }
+    return {k: v for k, v in sorted(by_lam.items())}
+
+
+lam_results = load_lambda_runs()
+if not lam_results:
+    st.info("暂无 λ 三档运行归档（report/runs/）。运行 backtest 后自动生成。")
+    st.stop()
+
 lc1, lc2 = st.columns([1, 1.4])
 with lc1:
     st.plotly_chart(lambda_comparison(lam_results), use_container_width=True,
@@ -94,13 +127,15 @@ with lc2:
         f"<td>{v['sharpe']:.3f}</td><td>{v['trades']}</td></tr>"
         for k, v in lam_results.items()
     )
+    n_assets = next(iter(lam_results.values())).get("n_assets", "?")
     st.markdown(f"""
     <table class="data-table">
         <thead><tr><th>档位</th><th>累计收益</th><th>最大回撤</th><th>夏普</th><th>成交</th></tr></thead>
         <tbody>{rows}</tbody>
     </table>
     <div style="color:{TEXT_DIM}; font-size:11px; margin-top:6px;">
-        同一底层数据/因子/信号，仅 λ 切换 · 池 1315~1423 只 · 2015-01 ~ 2026-11</div>
+        同一底层数据/因子/信号，仅 λ 切换 · 全池 {n_assets} 只 · 2015-01 ~ 2026-11 ·
+        数据源 report/runs/ 运行归档</div>
     """, unsafe_allow_html=True)
 
 st.divider()

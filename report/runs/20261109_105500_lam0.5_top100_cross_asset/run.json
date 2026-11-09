@@ -1,0 +1,18 @@
+{
+  "timestamp": "20261109_105500",
+  "strategy": "cross_asset",
+  "start": "20150101",
+  "end": "20261105",
+  "cash": 1000000,
+  "codes_explicit": false,
+  "n_assets": 5224,
+  "lam": 0.5,
+  "top_n": 100,
+  "n_trades": 9233,
+  "total_return": 0.6092,
+  "annual_return": 0.0426,
+  "max_drawdown": -0.2527,
+  "sharpe": 0.468,
+  "calmar": 0.168,
+  "note": "因子方向修正后全池实测（mom/vol 取负）"
+}

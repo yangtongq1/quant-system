@@ -225,7 +225,54 @@ def cmd_backtest(args):
     eq_df = result.equity.reset_index()
     eq_df.columns = ["date", "equity"]
     eq_df.to_csv(report_dir / "equity.csv", index=False)
+    _archive_run(args, result, eq_df)
     _generate_report_files(result, title=f"{args.strategy} 回测报告")
+
+
+def _archive_run(args, result, eq_df: pd.DataFrame) -> None:
+    """归档本次回测运行：参数 + 指标 + 净值曲线 → report/runs/<时间戳>_<标签>/。
+
+    看板 λ 对比页从 runs 目录读取真实运行结果，不再依赖硬编码。
+    """
+    import json
+    from datetime import datetime
+
+    runs_dir = ROOT / "report" / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    tag = ""
+    if args.strategy == "cross_asset":
+        lam = args.lam if getattr(args, "lam", -1) >= 0 else CONFIG.get("strategy", {}).get("lambda_risk", 0.5)
+        top_n = args.top_n or CONFIG.get("strategy", {}).get("stock_universe", 50)
+        tag = f"lam{lam}_top{top_n}_"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = runs_dir / f"{ts}_{tag}{args.strategy}"
+    run_dir.mkdir(exist_ok=True)
+
+    m = result.metrics
+    meta = {
+        "timestamp": ts,
+        "strategy": args.strategy,
+        "start": getattr(args, "start", ""),
+        "end": getattr(args, "end", ""),
+        "cash": getattr(args, "cash", 0),
+        "codes_explicit": bool(getattr(args, "codes", "")),
+        "n_assets": len(_backtest_codes(args)) if not getattr(args, "codes", "") else len(args.codes.split(",")),
+        "lam": (args.lam if getattr(args, "lam", -1) >= 0
+                else CONFIG.get("strategy", {}).get("lambda_risk", 0.5))
+        if args.strategy == "cross_asset" else None,
+        "top_n": (args.top_n or CONFIG.get("strategy", {}).get("stock_universe", 50))
+        if args.strategy == "cross_asset" else None,
+        "n_trades": len(result.trades),
+        "total_return": m.get("total_return"),
+        "annual_return": m.get("annual_return"),
+        "max_drawdown": m.get("max_drawdown"),
+        "sharpe": m.get("sharpe"),
+        "calmar": m.get("calmar"),
+    }
+    (run_dir / "run.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    eq_df.to_csv(run_dir / "equity.csv", index=False)
+    print(f"[archive] 运行已归档: {run_dir}")
 
 
 # ----------------------------------------------------------------------
