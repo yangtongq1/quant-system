@@ -393,8 +393,11 @@ class CrossAssetStrategy(Strategy):
             mean_r = sum(rets20) / len(rets20)
             var_r = sum((r - mean_r) ** 2 for r in rets20) / (len(rets20) - 1)
             vol20 = var_r ** 0.5
-            row = {"mom20": mom20, "mom60": mom60, "mom120": mom120,
-                   "rev5": rev5, "vol20": vol20}
+            # 方向修正（2026-11 全池 IC 质检 report/qa/fullpool_ic.csv）：
+            # A 股动量因子 21 日 IC≈-0.04（反转市场）→ 取负买跌得反转；
+            # 低波动溢价 IC(vol)≈-0.047 → 取负买低波
+            row = {"mom20": -mom20, "mom60": -mom60, "mom120": -mom120,
+                   "rev5": rev5, "vol20": -vol20}
             # 基本面合成分（point-in-time）
             if date is not None and self._fund_panels:
                 fs = self._fund_score(code, date)
