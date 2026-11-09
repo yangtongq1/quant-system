@@ -192,7 +192,13 @@ def main():
     parser.add_argument("--run-now", action="store_true", help="立即执行一次")
     parser.add_argument("--top-n", type=int, default=50)
     parser.add_argument("--lam", type=float, default=0.5)
+    parser.add_argument("--run-fetch-recent", type=int, default=0, metavar="DAYS",
+                        help="只跑环节1：增量采集最近 N 日行情后退出（看板控制台用）")
     args = parser.parse_args()
+
+    if args.run_fetch_recent:
+        ok = step_fetch_recent(args.run_fetch_recent)
+        sys.exit(0 if ok else 1)
 
     if args.run_now:
         run_daily_job(top_n=args.top_n, lam=args.lam)
