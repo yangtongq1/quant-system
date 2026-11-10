@@ -1,6 +1,0 @@
-2026-11-09 14:39:57,808 [INFO] scheduler: [scheduler] 已启动：每交易日 15:30 执行（Ctrl-C 停止）
-2026-11-09 15:51:36,519 [INFO] scheduler: ========== 每日任务开始 ==========
-2026-11-09 16:07:48,539 [INFO] scheduler: [step1] 200/5224（ok=200 fail=0）
-2026-11-09 16:20:59,782 [INFO] scheduler: [step1] 400/5224（ok=400 fail=0）
-2026-11-10 08:36:57,624 [INFO] scheduler: [step1] 600/5224（ok=600 fail=0）
-2026-11-09 16:20:59,782 [INFO] scheduler: [step1] 400/5224（ok=400 fail=0）
