@@ -38,9 +38,19 @@ def inject_css() -> str:
     color: {TEXT};
     font-family: {FONT_BODY};
 }}
-#MainMenu, footer, header[data-testid="stHeader"] {{
+#MainMenu, footer {{
     visibility: hidden;
     height: 0;
+}}
+/* 保留 stHeader（侧边栏折叠后的唯一展开入口在里面），只做透明化融入暗色主题；
+   隐藏 header 会连「Expand sidebar」按钮一起藏掉 → 侧边栏收起后无法恢复 */
+header[data-testid="stHeader"] {{
+    background: transparent;
+    border: none;
+}}
+header[data-testid="stHeader"] button[aria-label="Main menu"],
+header[data-testid="stHeader"] button[aria-label="Running"] {{
+    visibility: hidden;
 }}
 section[data-testid="stSidebar"] {{
     background: {PANEL_2};
@@ -48,6 +58,18 @@ section[data-testid="stSidebar"] {{
 }}
 section[data-testid="stSidebar"] * {{
     color: {TEXT} !important;
+}}
+/* 侧边栏展开/收起按钮：终端风格高亮，确保任何窗口宽度下可见可点 */
+header[data-testid="stHeader"] button[aria-label="Expand sidebar"],
+header[data-testid="stHeader"] button[aria-label="Collapse sidebar"] {{
+    visibility: visible !important;
+    color: {ACCENT} !important;
+    background: {PANEL} !important;
+    border: 1px solid {BORDER} !important;
+    border-radius: 8px !important;
+    min-width: 34px;
+    min-height: 34px;
+    z-index: 999;
 }}
 h1, h2, h3, h4 {{
     color: {TEXT} !important;
