@@ -20,6 +20,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -473,6 +476,40 @@ def cmd_qmt_status(args):
     print("=" * 56)
 
 
+def cmd_gm_status(args):
+    """掘金仿真连接诊断：SDK / token / 账户 / 资金 / 持仓。"""
+    from execution.gmtrade_broker import GmTradeBroker
+
+    b = GmTradeBroker()
+    st = b.status()
+    print("=" * 56)
+    print("掘金量化（MyQuant）仿真连接诊断")
+    print("=" * 56)
+    print(f"  模式       : {st['mode']}（通道：{st['channel']}）")
+    print(f"  仿真账户ID : {st['account']}")
+    print(f"  token 登记 : {'是' if st['token_registered'] else '否'}")
+    print(f"  SDK Python : {st['sdk_py_version']}（gmtrade 需 3.6–3.10）")
+    if st["last_error"]:
+        print(f"  最后错误   : {st['last_error']}")
+    print("-" * 56)
+    if b.dry_run:
+        print("  状态：DRY_RUN（无法连接掘金仿真）")
+        print("  免费开通（全程网页，无需券商）：")
+        print("    1. 注册：https://sim.myquant.cn（掘金账号）")
+        print("    2. 登录 → 交易页面 → 新建账户 → 选「股票」类型 → 设初始资金")
+        print("    3. 复制账户 ID；个人中心 → 安全设置 → 获取/复制 token")
+        print("    4. .env 写入：GMTRADE_TOKEN=xxx GMTRADE_ACCOUNT=xxx")
+        print("    5. 注意：gmtrade 仅支持 Python 3.6–3.10（需用 py310 解释器运行）")
+        print("    6. 重跑：python main.py gm-status")
+    else:
+        print("  状态：LIVE（已连接掘金仿真柜台）")
+        acct = b.get_account()
+        print(f"  账户资金   : {acct}")
+        pos = b.get_positions()
+        print(f"  持仓数量   : {len(pos)}")
+    print("=" * 56)
+
+
 def cmd_run_paper(args):
     """模拟盘：策略重放 → 期末目标持仓 → 差额调仓单 → 执行入库。
 
@@ -498,7 +535,30 @@ def cmd_run_paper(args):
 
     use_supermind = getattr(args, "supermind", False)
     use_qmt = getattr(args, "qmt", False)
+    use_gmtrade = getattr(args, "gmtrade", False)
     broker = None
+    if use_gmtrade:
+        # gmtrade 仅支持 Python 3.6–3.10；主力 3.13 环境自动切换 py310 重启自身
+        try:
+            import gmtrade  # noqa: F401
+        except ImportError:
+            from execution.gmtrade_broker import _PY310
+            if os.path.exists(_PY310):
+                print(f"[run-paper] gmtrade 需 Python 3.10（当前 {sys.version.split()[0]}），"
+                      f"用 py310 重启：{_PY310}")
+                sys.exit(subprocess.call([_PY310] + sys.argv))
+            print("[run-paper] 未找到 py310 解释器，gmtrade 无法使用，回退本地 PaperBroker。")
+            use_gmtrade = False
+    if use_gmtrade and broker is None:
+        from execution.gmtrade_broker import GmTradeBroker
+        broker = GmTradeBroker()
+        if broker.dry_run:
+            print(f"[run-paper] 掘金仿真不可用：{broker.last_error}")
+            print("[run-paper] 回退本地 PaperBroker（开通步骤：python main.py gm-status）。")
+            use_gmtrade = False
+        else:
+            # 风控同样注入掘金执行链（红线：真实委托前强制校验）
+            broker.risk_manager = risk_manager
     if use_qmt:
         from execution.qmt_broker import QmtBroker
         broker = QmtBroker()
@@ -520,7 +580,9 @@ def cmd_run_paper(args):
             broker.risk_manager = risk_manager
     if broker is None:
         broker = PaperBrokerAdapter(initial_cash=1_000_000.0, risk_manager=risk_manager)
-    exec_name = "QMT" if use_qmt else ("SuperMind" if use_supermind else "本地 PaperBroker")
+    exec_name = ("掘金仿真" if use_gmtrade else
+                 "QMT" if use_qmt else
+                 ("SuperMind" if use_supermind else "本地 PaperBroker"))
 
     print(f"[run-paper] 执行器：{exec_name}"
           f"（dry_run={getattr(broker, 'dry_run', False)}）")
@@ -669,12 +731,17 @@ def main():
     p = sub.add_parser("run-paper")
     p.add_argument("--supermind", action="store_true", help="用 SuperMind 仿真盘（默认本地 PaperBroker）")
     p.add_argument("--qmt", action="store_true", help="用 QMT/miniQMT 仿真盘（xtquant，优先于 --supermind）")
+    p.add_argument("--gmtrade", action="store_true",
+                   help="用掘金量化仿真盘（gmtrade，免费网页注册，优先于 --qmt/--supermind；需 py310）")
     p.add_argument("--top-n", type=int, default=30, help="持股数")
     p.add_argument("--lam", type=float, default=-1, help="风险档位 λ（0.1/0.5/0.9）")
     p.set_defaults(func=cmd_run_paper)
 
     p = sub.add_parser("sm-status", help="SuperMind 连接诊断（SDK/账号/客户端状态）")
     p.set_defaults(func=cmd_sm_status)
+
+    p = sub.add_parser("gm-status", help="掘金量化仿真连接诊断（gmtrade/token/账户/资金）")
+    p.set_defaults(func=cmd_gm_status)
 
     p = sub.add_parser("qmt-status", help="QMT/miniQMT 连接诊断（xtquant/账号/客户端状态）")
     p.set_defaults(func=cmd_qmt_status)

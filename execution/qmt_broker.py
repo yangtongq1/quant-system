@@ -98,8 +98,11 @@ class QmtBroker(BrokerAdapter):
         # session_id：同一进程内唯一即可；不传用时间戳派生
         sid = session_id or int(datetime.now().strftime("%H%M%S"))
         self.trader = XtQuantTrader(self.qmt_path, sid)
-        if self.trader.start() != 0:
-            raise RuntimeError("XtQuantTrader.start() 失败（miniQMT 未启动？）")
+        # 注意：新版 xtquant（250807+）start() 无返回值（None）；
+        # 旧版返回 0 表示成功。None/0 都视为启动成功。
+        started = self.trader.start()
+        if started not in (None, 0):
+            raise RuntimeError(f"XtQuantTrader.start() 失败：{started}（miniQMT 未启动？）")
         if not self.trader.connect(self.account):
             raise RuntimeError(f"connect({self.account}) 失败（账号未登录？）")
         self._XtQuantTrader = XtQuantTrader
