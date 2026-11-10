@@ -32,6 +32,8 @@ load_env(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 
 # miniQMT userdata 常见安装路径（用于自动探测）
 _QMT_PATH_CANDIDATES = [
+    r"C:\QMT模拟交易端\userdata_mini",
+    r"C:\华金QMT模拟交易\userdata_mini",
     r"C:\国金QMT交易端\userdata_mini",
     r"C:\bins_qmt\userdata_mini",
     r"C:\QMT\userdata_mini",
