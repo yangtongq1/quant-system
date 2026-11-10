@@ -62,10 +62,7 @@ def last_price(code: str) -> float | None:
 
 
 st.markdown(f"""
-<div style="font-size:22px; font-weight:800; letter-spacing:.04em;
-             font-family:'JetBrains Mono',Consolas,monospace; color:{ACCENT};">
-    ◈ POSITIONS & ORDERS
-</div>
+<div class="page-title">◈ POSITIONS & ORDERS</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">持仓 · 订单 · 成交流水 · A股 + ETF</div>
 """, unsafe_allow_html=True)
 

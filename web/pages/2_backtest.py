@@ -18,10 +18,7 @@ from web.charts import (candlestick, drawdown_chart, equity_chart,
                         lambda_comparison, monthly_heatmap)
 
 st.markdown(f"""
-<div style="font-size:22px; font-weight:800; letter-spacing:.04em;
-             font-family:'JetBrains Mono',Consolas,monospace; color:{ACCENT};">
-    ◈ BACKTEST REPORT
-</div>
+<div class="page-title">◈ BACKTEST REPORT</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">净值 · 回撤 · 月度热力 · λ 三档对比 · 资产K线</div>
 """, unsafe_allow_html=True)
 

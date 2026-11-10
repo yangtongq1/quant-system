@@ -19,10 +19,7 @@ from knowledge.storage import KnowledgeStorage
 kb = KnowledgeStorage(ROOT / "knowledge" / "knowledge.db")
 
 st.markdown(f"""
-<div style="font-size:22px; font-weight:800; letter-spacing:.04em;
-             font-family:'JetBrains Mono',Consolas,monospace; color:{ACCENT};">
-    ◈ KNOWLEDGE BASE
-</div>
+<div class="page-title">◈ KNOWLEDGE BASE</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">资讯采集 · 全文检索 · 中英双语</div>
 """, unsafe_allow_html=True)
 

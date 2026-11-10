@@ -19,10 +19,7 @@ st.set_page_config(page_title="系统控制台 · QUANT TERMINAL", layout="wide"
 st.markdown(inject_css(), unsafe_allow_html=True)
 
 st.markdown(f"""
-<div style="font-size:22px; font-weight:800; letter-spacing:.04em;
-             font-family:'JetBrains Mono',Consolas,monospace; color:{ACCENT};">
-    ◈ SYSTEM CONSOLE
-</div>
+<div class="page-title">◈ SYSTEM CONSOLE</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">
     系统操作台 · 数据采集 / 回测 / 因子 / 风控 / 执行 · 后台运行 + 实时日志</div>
 """, unsafe_allow_html=True)

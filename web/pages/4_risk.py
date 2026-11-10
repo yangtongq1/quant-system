@@ -18,10 +18,7 @@ st.markdown(inject_css(), unsafe_allow_html=True)
 from web.charts import correlation_gauge
 
 st.markdown(f"""
-<div style="font-size:22px; font-weight:800; letter-spacing:.04em;
-             font-family:'JetBrains Mono',Consolas,monospace; color:{ACCENT};">
-    ◈ RISK CONTROL
-</div>
+<div class="page-title">◈ RISK CONTROL</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">
     事前拦截 / 事中监控 / 事后复盘 · 对冲失效监控 · 压力测试</div>
 """, unsafe_allow_html=True)

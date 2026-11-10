@@ -18,10 +18,7 @@ from factors.engine import list_factors
 from web.charts import factor_corr_heatmap, factor_ic_bar
 
 st.markdown(f"""
-<div style="font-size:22px; font-weight:800; letter-spacing:.04em;
-             font-family:'JetBrains Mono',Consolas,monospace; color:{ACCENT};">
-    ◈ FACTOR QA
-</div>
+<div class="page-title">◈ FACTOR QA</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">
     IC / ICIR / 覆盖率 / 分年稳定性 / 去相关 · 已注册 {len(list_factors())} 因子
 </div>

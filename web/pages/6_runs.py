@@ -15,10 +15,7 @@ st.set_page_config(page_title="运行中心 · QUANT TERMINAL", layout="wide")
 st.markdown(inject_css(), unsafe_allow_html=True)
 
 st.markdown(f"""
-<div style="font-size:22px; font-weight:800; letter-spacing:.04em;
-             font-family:'JetBrains Mono',Consolas,monospace; color:{ACCENT};">
-    ◈ RUN CENTER
-</div>
+<div class="page-title">◈ RUN CENTER</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">
     回测运行归档 · 每次运行自动留痕（参数/指标/净值）· 目录 report/runs/</div>
 """, unsafe_allow_html=True)
