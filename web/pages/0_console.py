@@ -195,6 +195,65 @@ with e3:
                    f"模拟盘 λ={p_lam} TopN={p_top}")
 show_task("run_paper")
 
+# SuperMind / QMT 连接状态卡（同步诊断，秒级）
+sm_c1, sm_c2 = st.columns([2, 1])
+with sm_c1:
+    st.markdown("**SuperMind 仿真通道**（真实委托需客户端在线 + 资金账号）")
+    if st.button("▶ 诊断 SuperMind 连接", use_container_width=True):
+        try:
+            from execution.supermind_broker import SuperMindBroker
+            b = SuperMindBroker()
+            st_status = b.status()
+            if st_status["mode"] == "LIVE":
+                acct = b.get_account()
+                pos_n = len(b.get_positions())
+                st.success(f"已连接真实仿真账户 {st_status['account']}："
+                           f"总资产 {acct.get('total_value', '?')} · 持仓 {pos_n} 只")
+            else:
+                st.warning(f"DRY_RUN 模式：{st_status['last_error']}")
+                st.caption("修复：① 装客户端 zjcmpp.hexin.com.cn（下载 THS_Qstudio_Setup_Mfjy.exe）"
+                           "② 同花顺账号登录并创建仿真账户 ③ 资金账号写入 .env 的 SUPERMIND_ACCOUNT")
+        except Exception as e:  # noqa: BLE001
+            st.error(f"诊断异常：{e}")
+with sm_c2:
+    if st.button("▶ 模拟盘走 SuperMind", use_container_width=True,
+                 help="需客户端在线且 .env 配置 SUPERMIND_ACCOUNT，否则自动回退本地 PaperBroker"):
+        start_task("run_paper_sm",
+                   ["main.py", "run-paper", "--supermind", "--lam", p_lam,
+                    "--top-n", str(int(p_top))],
+                   f"模拟盘（SuperMind）λ={p_lam} TopN={p_top}")
+show_task("run_paper_sm")
+
+# QMT / miniQMT 通道（推荐路线）
+q_c1, q_c2 = st.columns([2, 1])
+with q_c1:
+    st.markdown("**QMT / miniQMT 通道**（券商开通 · 软件 free · xtquant 官方 SDK）")
+    if st.button("▶ 诊断 QMT 连接", use_container_width=True):
+        try:
+            from execution.qmt_broker import QmtBroker
+            b = QmtBroker()
+            stq = b.status()
+            if stq["mode"] == "LIVE":
+                acct = b.get_account()
+                pos_n = len(b.get_positions())
+                st.success(f"已连接 QMT 账户 {stq['account']}："
+                           f"总资产 {acct.get('total_value', '?')} · 持仓 {pos_n} 只")
+            else:
+                st.warning(f"DRY_RUN 模式：{stq['last_error']}")
+                st.caption("开通：① 券商开 QMT 权限（国金/华西/方正/华宝等 10 万日均即可）"
+                           "② 装 QMT 客户端登录并启动 miniQMT "
+                           "③ .env 配 QMT_ACCOUNT / QMT_PATH")
+        except Exception as e:  # noqa: BLE001
+            st.error(f"诊断异常：{e}")
+with q_c2:
+    if st.button("▶ 模拟盘走 QMT", use_container_width=True,
+                 help="需 miniQMT 运行且 .env 配置 QMT_ACCOUNT，否则自动回退本地 PaperBroker"):
+        start_task("run_paper_qmt",
+                   ["main.py", "run-paper", "--qmt", "--lam", p_lam,
+                    "--top-n", str(int(p_top))],
+                   f"模拟盘（QMT）λ={p_lam} TopN={p_top}")
+show_task("run_paper_qmt")
+
 st.divider()
 st.markdown(f"""
 <div style="color:{TEXT_DIM}; font-size:11px;">
@@ -206,7 +265,8 @@ st.markdown(f"""
 has_running = any(
     (t := st.session_state.get(f"task_{k}")) and not t.get("done")
     for k in ["fetch_recent", "fetch_etf", "fetch_fund", "backtest",
-              "factors_qa", "stress", "monitor", "run_paper"]
+              "factors_qa", "stress", "monitor", "run_paper", "run_paper_sm",
+              "run_paper_qmt"]
 )
 if has_running:
     st.empty()  # 占位避免空容器警告

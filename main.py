@@ -401,6 +401,78 @@ def cmd_stress(args):
     print(f"\n[stress] 已存 {out / 'stress_test.csv'} 与 {out / 'hedge_failure.csv'}")
 
 
+def cmd_sm_status(args):
+    """SuperMind 连接诊断：SDK / 账号配置 / 客户端登录状态 / 账户资金 / 持仓。"""
+    from execution.supermind_broker import SuperMindBroker
+
+    b = SuperMindBroker()
+    st = b.status()
+    print("=" * 56)
+    print("SuperMind 连接诊断")
+    print("=" * 56)
+    print(f"  模式         : {st['mode']}")
+    print(f"  资金账号     : {st['account']}")
+    print(f"  API key 登记 : {'是' if st['api_key_registered'] else '否'}"
+          f"（sk- 密钥目前仅登记，交易接口不消费）")
+    print(f"  SDK          : {'已安装' if st['sdk_installed'] else '未安装'}")
+    if st["last_error"]:
+        print(f"  最后错误     : {st['last_error']}")
+    print("-" * 56)
+    if b.dry_run:
+        print("  状态：DRY_RUN（无法连接真实仿真账户）")
+        print("  修复步骤：")
+        print("    1. 下载 SuperMind 客户端（Windows）：")
+        print("       http://zjcmpp.hexin.com.cn/download/lhjy3/Free/THS_Qstudio_Setup_Mfjy.exe")
+        print("    2. 同花顺账号登录客户端，创建仿真模拟账户并保持登录")
+        print("    3. 把仿真资金账号写入项目根 .env：SUPERMIND_ACCOUNT=你的资金账号")
+        print("    4. 在客户端研究环境内运行（SDK 随客户端内置，PyPI 无此包）")
+        print("    5. 重跑：python main.py sm-status")
+    else:
+        print("  状态：LIVE（已连接真实仿真账户）")
+        acct = b.get_account()
+        print(f"  账户资金     : {acct}")
+        pos = b.get_positions()
+        print(f"  持仓数量     : {len(pos)}")
+        for p in pos[:10]:
+            print(f"    {p}")
+    print("=" * 56)
+
+
+def cmd_qmt_status(args):
+    """QMT/miniQMT 连接诊断：SDK / 账号 / 客户端状态 / 账户资金 / 持仓。"""
+    from execution.qmt_broker import QmtBroker
+
+    b = QmtBroker()
+    st = b.status()
+    print("=" * 56)
+    print("QMT / miniQMT 连接诊断")
+    print("=" * 56)
+    print(f"  模式         : {st['mode']}（通道：{st['channel']}）")
+    print(f"  资金账号     : {st['account']}")
+    print(f"  userdata 路径: {st['qmt_path']}")
+    print(f"  API key 登记 : {'是' if st['api_key_registered'] else '否'}（sk-qmt 密钥本通道不消费）")
+    if st["last_error"]:
+        print(f"  最后错误     : {st['last_error']}")
+    print("-" * 56)
+    if b.dry_run:
+        print("  状态：DRY_RUN（无法连接 QMT）")
+        print("  开通步骤：")
+        print("    1. 券商开通 QMT/miniQMT 权限（国金/华西/方正/华宝等 10 万日均资产即可，软件免费）")
+        print("    2. 安装 QMT 客户端（券商提供），登录资金账号，启动 miniQMT（极简模式）保持运行")
+        print("    3. .env 写入：QMT_ACCOUNT=资金账号  QMT_PATH=userdata_mini 路径（留空自动探测）")
+        print("    4. 重跑：python main.py qmt-status")
+    else:
+        print("  状态：LIVE（已连接 QMT 仿真账户）")
+        acct = b.get_account()
+        print(f"  账户资金     : {acct}")
+        pos = b.get_positions()
+        print(f"  持仓数量     : {len(pos)}")
+        for p in pos[:10]:
+            print(f"    {getattr(p, 'stock_code', '?')} "
+                  f"vol={getattr(p, 'm_nVolume', '?')}")
+    print("=" * 56)
+
+
 def cmd_run_paper(args):
     """模拟盘：策略重放 → 期末目标持仓 → 差额调仓单 → 执行入库。
 
@@ -425,15 +497,32 @@ def cmd_run_paper(args):
     risk_manager = RiskManager(rules)
 
     use_supermind = getattr(args, "supermind", False)
-    if use_supermind:
+    use_qmt = getattr(args, "qmt", False)
+    broker = None
+    if use_qmt:
+        from execution.qmt_broker import QmtBroker
+        broker = QmtBroker()
+        if broker.dry_run:
+            print(f"[run-paper] QMT 不可用：{broker.last_error}")
+            print("[run-paper] 回退本地 PaperBroker。")
+            use_qmt = False
+        else:
+            # 风控同样注入 QMT 执行链（红线：真实委托前强制校验）
+            broker.risk_manager = risk_manager
+    if use_supermind and broker is None:
         broker = SuperMindBroker()
         if broker.dry_run:
-            print("[run-paper] SuperMind 不可用（未装 SDK/未配置账号），回退本地 PaperBroker。")
+            print(f"[run-paper] SuperMind 不可用：{broker.last_error}")
+            print("[run-paper] 回退本地 PaperBroker。")
             use_supermind = False
-    if not use_supermind:
+        else:
+            # 风控同样注入 SuperMind 执行链（红线：真实委托前强制校验）
+            broker.risk_manager = risk_manager
+    if broker is None:
         broker = PaperBrokerAdapter(initial_cash=1_000_000.0, risk_manager=risk_manager)
+    exec_name = "QMT" if use_qmt else ("SuperMind" if use_supermind else "本地 PaperBroker")
 
-    print(f"[run-paper] 执行器：{'SuperMind' if use_supermind else '本地 PaperBroker'}"
+    print(f"[run-paper] 执行器：{exec_name}"
           f"（dry_run={getattr(broker, 'dry_run', False)}）")
 
     result = run_paper_signals(
@@ -579,9 +668,16 @@ def main():
 
     p = sub.add_parser("run-paper")
     p.add_argument("--supermind", action="store_true", help="用 SuperMind 仿真盘（默认本地 PaperBroker）")
+    p.add_argument("--qmt", action="store_true", help="用 QMT/miniQMT 仿真盘（xtquant，优先于 --supermind）")
     p.add_argument("--top-n", type=int, default=30, help="持股数")
     p.add_argument("--lam", type=float, default=-1, help="风险档位 λ（0.1/0.5/0.9）")
     p.set_defaults(func=cmd_run_paper)
+
+    p = sub.add_parser("sm-status", help="SuperMind 连接诊断（SDK/账号/客户端状态）")
+    p.set_defaults(func=cmd_sm_status)
+
+    p = sub.add_parser("qmt-status", help="QMT/miniQMT 连接诊断（xtquant/账号/客户端状态）")
+    p.set_defaults(func=cmd_qmt_status)
 
     p = sub.add_parser("monitor")
     p.set_defaults(func=cmd_monitor)
