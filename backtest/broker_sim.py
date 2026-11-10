@@ -78,6 +78,7 @@ class PaperBroker:
         self.positions: dict[str, Position] = {}
         self._today_bought: dict[str, int] = {}  # 今日买入（T+1 锁定，次日解锁）
         self.trades: list[dict] = []             # 成交流水
+        self.current_date: str | None = None     # 由引擎注入当前交易日（成交流水用）
 
     # ---------- 成本 ----------
     def _commission(self, amount: float) -> float:
@@ -117,6 +118,7 @@ class PaperBroker:
         self.trades.append({
             "code": code, "side": "buy", "price": round(fill_price, 4),
             "volume": volume, "fee": round(fee, 4),
+            "date": self.current_date or "",
         })
         return fill_price
 
@@ -141,6 +143,7 @@ class PaperBroker:
         self.trades.append({
             "code": code, "side": "sell", "price": round(fill_price, 4),
             "volume": volume, "fee": round(fee, 4),
+            "date": self.current_date or "",
         })
         return fill_price
 

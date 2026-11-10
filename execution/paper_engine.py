@@ -150,11 +150,14 @@ def run_paper_signals(
         "lam": lam,
         "top_n": top_n,
         "equity": equity,
+        # 重放期内全部成交流水（买入+卖出，含日期/费用）→ 入 trades 表
+        "replay_trades": list(getattr(paper_core, "trades", [])),
+        "trade_batch": f"RP-{datetime.now().strftime('%Y%m%d%H%M%S')}",
     }
 
 
 def persist_paper_state(broker, result: dict, storage: "Storage"):
-    """订单/持仓/账户快照入库（幂等：主键 OR REPLACE）。"""
+    """订单/持仓/账户快照入库（幂等：主键 OR REPLACE）+ 重放成交流水入库。"""
     now = datetime.now().isoformat(timespec="seconds")
     conn = sqlite3.connect(str(ROOT / "data" / "quant.db"))
     cur = conn.cursor()
@@ -180,5 +183,23 @@ def persist_paper_state(broker, result: dict, storage: "Storage"):
         "VALUES (?, ?, ?, ?)",
         ("paper_local", 0.0, float(result.get("equity", 0.0)), now),
     )
+    # ── 重放成交流水入库（完整买卖记录：回放期内每一笔买入/卖出）──
+    # 幂等：同一次 run-paper 的批次号去重（重复执行不重复入账）
+    batch = result.get("trade_batch")
+    if batch:
+        n = cur.execute(
+            "SELECT COUNT(*) FROM trades WHERE order_id LIKE ?", (f"{batch}-%",)
+        ).fetchone()[0]
+        replay_trades = result.get("replay_trades") or []
+        if n == 0 and replay_trades:
+            for i, t in enumerate(replay_trades):
+                cur.execute(
+                    "INSERT OR REPLACE INTO trades "
+                    "(trade_id, order_id, code, side, price, volume, fee, time) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (f"{batch}-{i:05d}", f"{batch}-{i:05d}", t["code"], t["side"],
+                     float(t["price"]), int(t["volume"]), float(t.get("fee", 0)),
+                     t.get("date") or now[:10]),
+                )
     conn.commit()
     conn.close()

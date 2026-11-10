@@ -86,21 +86,26 @@ def test_clip_bounds():
 
 
 def test_select_stocks_top_n():
-    """选股：按综合分选出 top N，数量正确。"""
+    """选股：按综合分选出 top N，数量正确。
+
+    因子方向（2026-11 全池 IC 质检修正）：动量取负（A股反转市场，买跌不买涨）、
+    低波动加分 → 动量最弱且波动低的股票应入选，动量最强者不应入选。
+    """
     n = 200
     rng = np.random.default_rng(3)
     dates = pd.date_range("2025-01-01", periods=n, freq="B")
     s = CrossAssetStrategy(top_n=3)
-    # 5 只股票，动量差异明显
+    # 5 只股票，编号越大动量越强（用固定漂移制造清晰差异）
     for i in range(5):
-        drift = 0.001 * i  # 编号越大动量越强
+        drift = 0.002 * i
         px = 10 * np.cumprod(1 + rng.normal(drift, 0.01, n))
         s._stock_close[f"60000{i}"] = _to_acc(pd.Series(px, index=dates))
 
     selected = s.select_stocks()
     assert len(selected) == 3
-    # 动量最强的 600004 应在选中集合
-    assert "600004" in selected
+    # 反转逻辑：动量最弱的 600000 应入选，动量最强的 600004 不应入选
+    assert "600000" in selected
+    assert "600004" not in selected
 
 
 def test_month_end_rebalance_trades():

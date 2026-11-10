@@ -83,8 +83,10 @@ class BacktestEngine:
         for d in all_dates:
             today_bars = bars_by_date[d]
 
-            # 1. 盘前（注入当前日期，策略可用于交易日轴推进）
+            # 1. 盘前（注入当前日期，策略可用于交易日轴推进；broker 同步日期供成交流水记录）
             ctx.current_date = d
+            if hasattr(self.broker, "current_date"):
+                self.broker.current_date = str(d)[:10]
             ctx.portfolio = self._portfolio_snapshot(today_bars)
             self.strategy.before_trading(ctx)
 
