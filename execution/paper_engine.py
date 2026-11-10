@@ -58,13 +58,16 @@ def run_paper_signals(
     initial_cash: float = 1_000_000.0,
     top_n: int | None = None,
     lam: float | None = None,
-    pool_limit: int = 400,
+    pool_limit: int = 0,
 ) -> dict:
     """跑一次模拟盘信号。
 
     核心思路：用 BacktestEngine 把策略真实重放到最新交易日（真实资金、
     真实成交约束），期末 PaperBroker 持仓即策略当前应该持有的目标组合；
     再与数据库中记录的现持仓求差额，生成调仓单。
+
+    pool_limit=0 表示全池（与回测一致，保证模拟盘目标持仓 = 回测策略持仓）；
+    传正整数则截取前 N 只（调试用，快但与回测池不一致）。
 
     返回：{"orders", "target_positions", "n_bars", "last_date", "lam", "top_n", "equity"}
     """
@@ -79,13 +82,13 @@ def run_paper_signals(
     lam = lam if lam is not None else strat_cfg.get("lambda_risk", 0.5)
     top_n = top_n or strat_cfg.get("top_n", 30)
 
-    # ── 1. 组池：ETF + 代表性股票池 ──
+    # ── 1. 组池：ETF + 全市场股票池（与回测一致；pool_limit>0 仅调试用）──
     bars_dir = ROOT / "data" / "bars"
     stock_codes = sorted(
         p.stem for p in bars_dir.glob("*.parquet")
         if p.stem not in ("518880", "513100")
     )
-    if len(stock_codes) > pool_limit:
+    if pool_limit and len(stock_codes) > pool_limit:
         stock_codes = stock_codes[:pool_limit]
     codes = ["518880", "513100"] + stock_codes
 

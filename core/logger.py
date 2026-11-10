@@ -10,11 +10,14 @@ _CONFIGURED = False
 
 
 def get_logger(name: str = "quant", log_dir: str = "logs", level: int = logging.INFO) -> logging.Logger:
-    """获取日志器（单例配置，按日滚动，保留 14 天）。"""
-    global _CONFIGURED
+    """获取日志器（单例配置，按日滚动，保留 14 天）。
+
+    防重复：同进程内多次调用（如调度器先起 paper 再起 scheduler logger）
+    只配置一次 handler；不同 name 独立文件。
+    """
     logger = logging.getLogger(name)
 
-    if not _CONFIGURED:
+    if not logger.handlers:  # 已有 handler 则跳过（防重复输出）
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
@@ -31,6 +34,6 @@ def get_logger(name: str = "quant", log_dir: str = "logs", level: int = logging.
         logger.addHandler(ch)
 
         logger.setLevel(level)
-        _CONFIGURED = True
+        logger.propagate = False
 
     return logger

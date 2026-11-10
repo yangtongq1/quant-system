@@ -402,10 +402,27 @@ def cmd_stress(args):
 
 
 def cmd_run_paper(args):
-    """模拟盘：策略重放 → 期末目标持仓 → 差额调仓单 → 执行入库。"""
+    """模拟盘：策略重放 → 期末目标持仓 → 差额调仓单 → 执行入库。
+
+    红线：风控在执行前强制校验（RiskManager 注入 BrokerAdapter，策略无权绕过）。
+    """
     from execution.paper_broker import PaperBrokerAdapter
     from execution.paper_engine import persist_paper_state, run_paper_signals
     from execution.supermind_broker import SuperMindBroker
+
+    # 风控规则：阈值从 config.yaml 加载；月末全池调仓单量可达数十笔，
+    # 频率上限按「单标的持股数×2」放宽（正常调仓不拦截，异常频率仍拦截）
+    from risk.manager import RiskManager, RiskRules
+    risk_cfg = CONFIG.get("risk", {})
+    top_n_eff = getattr(args, "top_n", None) or CONFIG.get("strategy", {}).get("stock_universe", 50)
+    max_orders = max(int(top_n_eff * 2), 100)
+    rules = RiskRules(
+        max_position_pct=risk_cfg.get("max_position_pct", 0.20),
+        max_drawdown=risk_cfg.get("max_drawdown", 0.20),
+        max_single_stock_pct=risk_cfg.get("max_single_weight", 0.02),
+        max_orders_per_day=max_orders,
+    )
+    risk_manager = RiskManager(rules)
 
     use_supermind = getattr(args, "supermind", False)
     if use_supermind:
@@ -414,7 +431,7 @@ def cmd_run_paper(args):
             print("[run-paper] SuperMind 不可用（未装 SDK/未配置账号），回退本地 PaperBroker。")
             use_supermind = False
     if not use_supermind:
-        broker = PaperBrokerAdapter(initial_cash=1_000_000.0)
+        broker = PaperBrokerAdapter(initial_cash=1_000_000.0, risk_manager=risk_manager)
 
     print(f"[run-paper] 执行器：{'SuperMind' if use_supermind else '本地 PaperBroker'}"
           f"（dry_run={getattr(broker, 'dry_run', False)}）")
@@ -436,6 +453,14 @@ def cmd_run_paper(args):
         print(f"    {o['side']:4s} {o['code']} {o['volume']} @ {o['price']:.3f}")
     if not result["orders"]:
         print("    （目标持仓与现持仓一致，无调仓）")
+    # 风控事件回显（拒绝/拦截留痕）
+    risk_events = getattr(risk_manager, "events", [])
+    if risk_events:
+        print(f"[run-paper] ⚠️ 风控事件 {len(risk_events)} 条：")
+        for e in risk_events[-10:]:
+            print(f"    {e['time']} {e['type']} {e['code']} {e['detail']}")
+    else:
+        print("[run-paper] 风控校验通过（无拒绝/拦截事件）")
     print("[run-paper] 订单/持仓已入库 data/quant.db")
 
 
