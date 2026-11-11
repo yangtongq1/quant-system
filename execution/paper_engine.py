@@ -68,6 +68,23 @@ def load_current_positions() -> dict[str, float]:
         return {}
 
 
+def load_strategy_order_codes() -> set[str]:
+    """策略历史订单涉及的全部代码（orders 表）——「策略管理范围」依据。
+
+    柜台（QMT）持仓混有用户自有仓位（如 510300 两百万股）：代码从未
+    出现在策略订单历史 → 非策略持仓，差额计算绝不触碰。
+    """
+    db = ROOT / "data" / "quant.db"
+    if not db.exists():
+        return set()
+    try:
+        with sqlite3.connect(str(db)) as conn:
+            rows = conn.execute("SELECT DISTINCT code FROM orders").fetchall()
+        return {r[0] for r in rows if r[0]}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def reset_current_positions() -> None:
     """清空数据库现持仓（首跑建仓用：差额 = 目标持仓全量买入）。"""
     db = ROOT / "data" / "quant.db"
@@ -98,6 +115,30 @@ def _now_date() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
+def _pos_fields(p) -> tuple[str, int, int, float]:
+    """持仓对象/字典统一抽取（code, volume, available, avg_cost）。
+
+    兼容两种形态：xtquant 持仓对象（stock_code/volume/can_use_volume）
+    与本地 dict（code/volume/available）。
+    """
+    code = getattr(p, "stock_code", None) or getattr(p, "code", None)
+    if not code and isinstance(p, dict):
+        code = p.get("stock_code") or p.get("code")
+    vol = getattr(p, "volume", None)
+    if vol is None and isinstance(p, dict):
+        vol = p.get("volume")
+    can = getattr(p, "can_use_volume", None)
+    if can is None:
+        can = getattr(p, "available", None)
+    if can is None and isinstance(p, dict):
+        can = p.get("can_use_volume", p.get("available"))
+    cost = getattr(p, "open_price", None) or getattr(p, "avg_cost", None)
+    if cost is None and isinstance(p, dict):
+        cost = p.get("avg_cost", 0)
+    code = str(code or "").split(".")[0]
+    return code, int(vol or 0), int(can or 0), float(cost or 0)
+
+
 def run_paper_signals(
     broker,
     initial_cash: float = 1_000_000.0,
@@ -105,12 +146,18 @@ def run_paper_signals(
     lam: float | None = None,
     pool_limit: int = 0,
     target_capital: float = 0.0,
+    current_positions: dict[str, float] | None = None,
 ) -> dict:
     """跑一次模拟盘信号。
 
     核心思路：用 BacktestEngine 把策略真实重放到最新交易日（真实资金、
     真实成交约束），期末 PaperBroker 持仓即策略当前应该持有的目标组合；
-    再与数据库中记录的现持仓求差额，生成调仓单。
+    再与现持仓求差额，生成调仓单。
+
+    current_positions：现持仓基准。None → 读 DB 台账；外部通道模式传
+    柜台实际持仓（QMT query_stock_positions）——柜台是事实源，台账
+    漂移（废单虚增）自动纠正。差额仅覆盖策略池内标的（池外持仓=
+    用户自有，策略不动）。
 
     pool_limit=0 表示全池（与回测一致，保证模拟盘目标持仓 = 回测策略持仓）；
     传正整数则截取前 N 只（调试用，快但与回测池不一致）。
@@ -125,7 +172,7 @@ def run_paper_signals(
     from strategy.cross_asset import CrossAssetStrategy
 
     cfg = load_config(ROOT / "config" / "config.yaml")
-    strat_cfg = cfg.get("strategy", {}).get("cross_asset", {})
+    strat_cfg = cfg.get("strategy", {}).get("cross_asset", {}) or cfg.get("strategy", {})
     storage = Storage(str(ROOT / "data" / "quant.db"), str(ROOT / "data" / "bars"))
 
     lam = lam if lam is not None else strat_cfg.get("lambda_risk", 0.5)
@@ -196,11 +243,20 @@ def run_paper_signals(
         code: float(df["close"].iloc[-1])
         for code, df in bars.items()
     }
-    current = load_current_positions()
+    if current_positions is not None:
+        # 外部通道模式：柜台实际持仓 = 事实源，但仅取「策略管理范围」内标的。
+        # 管理范围 = 目标持仓 ∪ 策略历史订单代码（orders 表）∪ DB 台账代码。
+        # 柜台混有用户自有持仓（如 510300 两百万股）——不在管理范围，绝不触碰。
+        # TODO: 若用户自有与策略持仓同代码混合，卖出上限需按策略台账量截断
+        managed = (set(target_positions) | set(load_current_positions())
+                   | load_strategy_order_codes())
+        current = {str(c): float(v) for c, v in current_positions.items()
+                   if v > 0 and str(c) in managed}
+    else:
+        current = load_current_positions()
 
     orders = []
-    all_codes = set(target_positions) | set(current)
-    for code in sorted(all_codes):
+    for code in sorted(set(target_positions) | set(current)):
         tgt = target_positions.get(code, 0.0)
         cur = current.get(code, 0.0)
         diff = tgt - cur
@@ -226,11 +282,16 @@ def run_paper_signals(
     }
 
 
-def persist_paper_state(broker, result: dict, storage: "Storage", exec_report: list | None = None):
+def persist_paper_state(broker, result: dict, storage: "Storage", exec_report: list | None = None,
+                        channel_positions: list | None = None):
     """订单/持仓/账户快照入库（幂等：主键 OR REPLACE）+ 重放成交流水入库。
 
     exec_report：外部通道（QMT/掘金/SuperMind）执行报告——订单状态写
     SUBMITTED/REJECTED（真实委托语义）而非本地撮合的 FILLED。
+
+    channel_positions：外部通道实际持仓对象列表（QMT query_stock_positions
+    原始返回）。传入时执行后按柜台实际持仓修正 DB 台账（策略管理范围内）：
+    废单/撤单/未成交导致的台账漂移每次 run 自动对齐，柜台 = 事实源。
     """
     now = datetime.now().isoformat(timespec="seconds")
     conn = sqlite3.connect(str(ROOT / "data" / "quant.db"))
@@ -252,19 +313,51 @@ def persist_paper_state(broker, result: dict, storage: "Storage", exec_report: l
             (oid, o["code"], o["side"], float(o.get("price", 0)),
              int(o.get("volume", 0)), status, now, now, "cross_asset"),
         )
-    # 目标持仓覆盖式写入（最新快照语义）
-    cur.execute("DELETE FROM positions")
-    for code, vol in result.get("target_positions", {}).items():
+    # 持仓写入：外部通道模式按柜台实际持仓修正（策略管理范围内），
+    # 柜台 = 事实源——废单/未成交台账漂移每次 run 自动对齐
+    if channel_positions is not None:
+        managed = (set(result.get("target_positions", {}))
+                   | load_strategy_order_codes())
+        ch_pos = {}
+        for p in channel_positions:
+            code, vol, can, cost = _pos_fields(p)
+            if vol > 0 and code in managed:
+                ch_pos[code] = (int(vol), float(cost))
+        cur.execute("DELETE FROM positions")
+        for code, (vol, cost) in ch_pos.items():
+            cur.execute(
+                "INSERT OR REPLACE INTO positions (code, volume, avg_cost, market_value) "
+                "VALUES (?, ?, ?, 0)",
+                (code, vol, cost),
+            )
+    else:
+        # 目标持仓覆盖式写入（最新快照语义）
+        cur.execute("DELETE FROM positions")
+        for code, vol in result.get("target_positions", {}).items():
+            cur.execute(
+                "INSERT OR REPLACE INTO positions (code, volume, avg_cost, market_value) "
+                "VALUES (?, ?, 0, 0)",
+                (code, int(vol)),
+            )
+    if channel_positions is not None:
+        # 通道模式：账户快照写柜台真实资产
+        try:
+            acc = broker.get_account()
+            ch_cash = float(acc.get("available_cash") or 0.0)
+            ch_total = float(acc.get("total_value") or acc.get("total_asset") or 0.0)
+        except Exception:  # noqa: BLE001
+            ch_cash, ch_total = 0.0, float(result.get("equity", 0.0))
         cur.execute(
-            "INSERT OR REPLACE INTO positions (code, volume, avg_cost, market_value) "
-            "VALUES (?, ?, 0, 0)",
-            (code, int(vol)),
+            "INSERT OR REPLACE INTO accounts (account_id, cash, total_asset, update_time) "
+            "VALUES (?, ?, ?, ?)",
+            ("paper_local", ch_cash, ch_total, now),
         )
-    cur.execute(
-        "INSERT OR REPLACE INTO accounts (account_id, cash, total_asset, update_time) "
-        "VALUES (?, ?, ?, ?)",
-        ("paper_local", 0.0, float(result.get("equity", 0.0)), now),
-    )
+    else:
+        cur.execute(
+            "INSERT OR REPLACE INTO accounts (account_id, cash, total_asset, update_time) "
+            "VALUES (?, ?, ?, ?)",
+            ("paper_local", 0.0, float(result.get("equity", 0.0)), now),
+        )
     # ── 重放成交流水入库（完整买卖记录：回放期内每一笔买入/卖出）──
     # 幂等：同一次 run-paper 的批次号去重（重复执行不重复入账）
     batch = result.get("trade_batch")
@@ -323,12 +416,11 @@ def execute_orders_on_channel(
             total = cash
         positions = {}
         for p in broker.get_positions():
-            code = str(getattr(p, "code", "")).split(".")[0]
-            positions[code] = {
-                "volume": int(getattr(p, "volume", 0) or 0),
-                "available": int(getattr(p, "can_use_volume", getattr(p, "available", 0)) or 0),
-                "avg_cost": float(getattr(p, "open_price", getattr(p, "avg_cost", 0)) or 0),
-            }
+            # _pos_fields 兼容 xtquant 对象与 dict 两种形态
+            code, vol, can, cost = _pos_fields(p)
+            if not code:
+                continue
+            positions[code] = {"volume": vol, "available": can, "avg_cost": cost}
         return {"cash": cash, "total_asset": max(total, cash), "positions": positions}
 
     sells = [o for o in orders if o["side"] == "sell"]
@@ -365,6 +457,27 @@ def execute_orders_on_channel(
     for order in sells + buys:
         code, side, volume = order["code"], order["side"], int(order["volume"])
         ref_price = float(live_prices.get(code) or order.get("price", 0) or 0)
+        # ── 卖出量按柜台可用量截断（T+1：当日买入不可卖）──
+        # 柜台无可用持仓（can_use=0）：跳过——不再发必废的卖单（历史废单根因）
+        if side == "sell":
+            try:
+                avail = portfolio_view()["positions"].get(code, {}).get("available", 0)
+            except Exception:  # noqa: BLE001
+                avail = 0
+            if avail <= 0:
+                report.append({
+                    "code": code, "side": side, "volume": volume, "price": 0.0,
+                    "status": "SKIPPED",
+                    "reason": "柜台无可用持仓（can_use=0，台账漂移自动纠正）",
+                })
+                continue
+            if volume > avail:
+                report.append({
+                    "code": code, "side": side, "volume": volume, "price": 0.0,
+                    "status": "SKIPPED",
+                    "reason": f"卖出量 {volume} 超可用 {avail}（T+1 锁定）→ 截断为 {avail}",
+                })
+                volume = avail
         # 限价：买入加缓冲、卖出减缓冲（防开盘跳空废单），取整到分（合法 tick，
         # 三位小数限价会被柜台直接拒单）
         if side == "buy":

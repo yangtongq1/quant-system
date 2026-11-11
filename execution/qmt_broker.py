@@ -43,10 +43,27 @@ _QMT_PATH_CANDIDATES = [
 
 
 class QmtBroker(BrokerAdapter):
-    """QMT / miniQMT 仿真账户执行器（xtquant 官方协议）。"""
+    """QMT / miniQMT 仿真账户执行器（xtquant 官方协议）。
+
+    mode: "paper"（模拟盘，默认）/"live"（实盘，预留接口——实盘柜台路径与
+    账号由 .env 的 QMT_LIVE_* 系列变量指定，未配置则拒绝启动防误发真单）。
+    """
 
     def __init__(self, account: str | None = None, qmt_path: str | None = None,
-                 dry_run_on_fail: bool = True, session_id: int | None = None):
+                 dry_run_on_fail: bool = True, session_id: int | None = None,
+                 mode: str = "paper"):
+        self.mode = mode
+        if mode == "live":
+            # 实盘预留：路径/账号必须显式配置（QMT_LIVE_PATH/QMT_LIVE_ACCOUNT），
+            # 未配置直接拒绝——防误连实盘柜台发真单
+            live_path = os.environ.get("QMT_LIVE_PATH", "")
+            live_acc = os.environ.get("QMT_LIVE_ACCOUNT", "")
+            if not (live_path and live_acc):
+                self._fail("实盘模式需配置 QMT_LIVE_PATH / QMT_LIVE_ACCOUNT（防误发真单，未配置拒绝启动）",
+                           dry_run_on_fail)
+                return
+            account = account or live_acc
+            qmt_path = qmt_path or live_path
         self.account = account or os.environ.get("QMT_ACCOUNT", "")
         self.api_key = os.environ.get("SUPERMIND_API_KEY", "")  # sk-qmt 密钥：登记，本通道不用
         self.qmt_path = qmt_path or os.environ.get("QMT_PATH", "")

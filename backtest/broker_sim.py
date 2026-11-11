@@ -55,6 +55,20 @@ def can_sell_on_open(bar: dict, limit_rate: float = 0.10) -> bool:
     return True
 
 
+def is_t0_etf(code: str) -> bool:
+    """T+0 交易品种识别（A 股规则）。
+
+    T+0：跨境 ETF（沪 513xxx：纳指/标普/日经等）、黄金 ETF（518880 等）；
+    T+1：A 股股票、科创板/创业板股票、普通行业 ETF。
+    """
+    code = str(code).split(".")[0]
+    if code.startswith("513"):        # 跨境 ETF（纳指 513100 等）
+        return True
+    if code.startswith("5188"):       # 黄金 ETF（518880 等）
+        return True
+    return False
+
+
 class PaperBroker:
     """模拟资金账户 + 撮合。费率可配，默认 A 股常规水平。"""
 
@@ -113,6 +127,8 @@ class PaperBroker:
         new_volume = pos.volume + volume
         pos.avg_cost = (pos.avg_cost * pos.volume + total) / new_volume
         pos.volume = new_volume
+        if is_t0_etf(code):
+            pos.available += volume  # T+0 品种：当日买入即可卖
         self._today_bought[code] = self._today_bought.get(code, 0) + volume
 
         self.trades.append({

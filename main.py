@@ -607,11 +607,23 @@ def cmd_run_paper(args):
         reset_current_positions()
         print("[run-paper] --reset-positions：已清空本地现持仓（首跑建仓，差额=全买入）")
 
+    # 外部通道：柜台实际持仓 = 现持仓基准（事实源，台账漂移自动纠正）
+    channel_positions = None
+    current_positions = None
+    if external is not None:
+        from execution.paper_engine import _pos_fields
+        channel_positions = external.get_positions()
+        # _pos_fields 兼容 xtquant 对象与 dict（测试桩）两种形态
+        current_positions = {_pos_fields(p)[0]: float(_pos_fields(p)[1])
+                              for p in channel_positions}
+        print(f"[run-paper] 柜台实际持仓 {len(channel_positions)} 条（事实源，差额基准）")
+
     result = run_paper_signals(
         broker,
         top_n=getattr(args, "top_n", None) or 30,
         lam=getattr(args, "lam", None) if getattr(args, "lam", -1) >= 0 else None,
         target_capital=float(getattr(args, "capital", 0) or 0),
+        current_positions=current_positions,
     )
 
     exec_report = None
@@ -624,7 +636,11 @@ def cmd_run_paper(args):
 
     from data.storage import Storage
     storage = Storage(str(ROOT / "data" / "quant.db"), str(ROOT / "data" / "bars"))
-    persist_paper_state(broker, result, storage, exec_report=exec_report)
+    # 执行后重取柜台持仓：本次 run 的委托成交结果含在内（台账对齐柜台）
+    if external is not None:
+        channel_positions = external.get_positions()
+    persist_paper_state(broker, result, storage, exec_report=exec_report,
+                        channel_positions=channel_positions if external is not None else None)
 
     print(f"[run-paper] 重放至 {result['last_date']}（λ={result['lam']} top{result['top_n']}，"
           f"池 {result['n_bars']} 只，期末净值 {result['equity']:,.0f}）")

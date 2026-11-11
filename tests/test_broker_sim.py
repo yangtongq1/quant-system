@@ -77,3 +77,28 @@ def test_slippage():
     b.buy("600000", 10.0, 100)
     # 成交价 = 10 * 1.001 = 10.01（记录在成交流水中）
     assert abs(b.trades[-1]["price"] - 10.01) < 1e-6
+
+
+def test_t0_etf_recognition():
+    """T+0/T+1 品种识别：跨境/黄金 ETF 当日买即可卖；主板股票 T+1。"""
+    from backtest.broker_sim import PaperBroker, is_t0_etf
+
+    assert is_t0_etf("513100") is True    # 纳指 ETF（跨境 T+0）
+    assert is_t0_etf("518880") is True    # 黄金 ETF（T+0）
+    assert is_t0_etf("600519") is False   # 主板股票（T+1）
+    assert is_t0_etf("000001") is False   # 主板股票（T+1）
+
+    # T+0 ETF：当日买入当日可卖
+    b = PaperBroker(initial_cash=1_000_000.0)
+    assert b.buy("513100", 2.0, 1000) is not None
+    assert b.positions["513100"].available == 1000  # 当日即解锁
+    assert b.sell("513100", 2.0, 1000) is not None   # 当日卖出成功
+
+    # T+1 股票：当日买入不可卖，次日解锁
+    b2 = PaperBroker(initial_cash=1_000_000.0)
+    assert b2.buy("600519", 1700.0, 100) is not None
+    assert b2.positions["600519"].available == 0    # 当日锁定
+    assert b2.sell("600519", 1700.0, 100) is None   # 当日卖被拒
+    b2.next_day()
+    assert b2.positions["600519"].available == 100  # 次日解锁
+    assert b2.sell("600519", 1700.0, 100) is not None

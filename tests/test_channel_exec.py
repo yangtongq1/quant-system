@@ -42,6 +42,7 @@ class _ScriptedBroker(PaperBrokerAdapter):
         return [
             {"code": "600000", "volume": 10_000, "available": 10_000, "avg_cost": 8.0},
             {"code": "518880", "volume": 20_000, "available": 20_000, "avg_cost": 8.0},
+            {"code": "000001", "volume": 5_000, "available": 5_000, "avg_cost": 10.0},
         ]
 
 
@@ -110,3 +111,35 @@ def test_channel_exception_recorded():
     assert report[0]["status"] == "REJECTED"
     assert "RuntimeError" in report[0]["reason"]
     assert report[1]["status"] == "SUBMITTED"
+
+
+def test_sell_truncated_by_available():
+    """T+1 截断：卖出量超柜台可用量 → 截断为可用量；可用 0 → 跳过不发货。"""
+    broker = _ScriptedBroker()
+
+    class _PartialAvail(_ScriptedBroker):
+        def get_positions(self):
+            return [{"code": "600000", "volume": 10_000, "available": 3_000,
+                      "avg_cost": 8.0}]
+
+    b2 = _PartialAvail()
+    orders = [{"code": "600000", "side": "sell", "volume": 8_000, "price": 8.0}]
+    rm = RiskManager(RiskRules())
+    report = execute_orders_on_channel(b2, orders, rm, rm.rules, use_live_quotes=False)
+    # 截断为可用 3000，且以 3000 股下单
+    assert report[0]["volume"] == 8_000          # 报告保留原始需求量
+    assert b2.calls[0][3] == 3_000               # 实际委托量 = 可用量
+    assert any("截断" in r.get("reason", "") for r in report if r["status"] == "SKIPPED")
+    # 可用 0 → 跳过（台账漂移自动纠正，不发必废单）
+    b3 = _ScriptedBroker()
+
+    class _NoAvail(_ScriptedBroker):
+        def get_positions(self):
+            return [{"code": "600000", "volume": 10_000, "available": 0, "avg_cost": 8.0}]
+
+    b3 = _NoAvail()
+    orders3 = [{"code": "600000", "side": "sell", "volume": 8_000, "price": 8.0}]
+    rm3 = RiskManager(RiskRules())
+    report3 = execute_orders_on_channel(b3, orders3, rm3, rm3.rules, use_live_quotes=False)
+    assert report3[0]["status"] == "SKIPPED"
+    assert b3.calls == []                        # 未发货
