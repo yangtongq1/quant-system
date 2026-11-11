@@ -54,6 +54,10 @@ class QmtBroker(BrokerAdapter):
         self.dry_run = False
         self.orders: list[dict] = []
         self.last_error: str = ""
+        # 本地撮合核心（策略重放用，真实资金模拟；真实委托走 _order → QMT）
+        # run_paper_signals 用它跑回测引擎拿目标持仓，差额调仓单再发 QMT
+        from backtest.broker_sim import PaperBroker
+        self.paper = PaperBroker(initial_cash=1_000_000.0)
 
         try:
             from xtquant.xttrader import XtQuantTrader  # noqa: F401
