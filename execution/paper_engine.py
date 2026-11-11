@@ -89,6 +89,7 @@ def run_paper_signals(
     top_n: int | None = None,
     lam: float | None = None,
     pool_limit: int = 0,
+    target_capital: float = 0.0,
 ) -> dict:
     """跑一次模拟盘信号。
 
@@ -98,6 +99,9 @@ def run_paper_signals(
 
     pool_limit=0 表示全池（与回测一致，保证模拟盘目标持仓 = 回测策略持仓）；
     传正整数则截取前 N 只（调试用，快但与回测池不一致）。
+
+    target_capital>0：期末目标持仓等比缩放到指定资金规模（如 100 万），
+    权重结构不变、手数重取整——实盘资金≠回测资金时的正确落地方式。
 
     返回：{"orders", "target_positions", "n_bars", "last_date", "lam", "top_n", "equity"}
     """
@@ -153,6 +157,17 @@ def run_paper_signals(
     }
     equity = float(result.equity.iloc[-1]) if len(result.equity) else initial_cash
     last_date = str(result.equity.index[-1].date()) if len(result.equity) else "—"
+
+    # ── 2.5 资金规模缩放（实盘资金 ≠ 回测资金时）──
+    # 例：回测从 100 万滚到 178 万，但实盘只做 100 万 → 期末持仓等比缩放，
+    # 权重结构不变，手数重取整（100 股整数）。
+    if target_capital > 0 and equity > 0:
+        scale = target_capital / equity
+        target_positions = {
+            code: float(int(vol * scale / 100) * 100)
+            for code, vol in target_positions.items()
+        }
+        target_positions = {c: v for c, v in target_positions.items() if v > 0}
 
     # ── 3. 与现持仓求差额 → 调仓单 ──
     # 订单价格用「不复权真实价」（真实委托发往 QMT/掘金柜台，真实价撮合；

@@ -602,6 +602,7 @@ def cmd_run_paper(args):
         broker,
         top_n=getattr(args, "top_n", None) or 30,
         lam=getattr(args, "lam", None) if getattr(args, "lam", -1) >= 0 else None,
+        target_capital=float(getattr(args, "capital", 0) or 0),
     )
 
     exec_report = None
@@ -764,6 +765,8 @@ def main():
                    help="用掘金量化仿真盘（gmtrade，免费网页注册，优先于 --qmt/--supermind；需 py310）")
     p.add_argument("--top-n", type=int, default=30, help="持股数")
     p.add_argument("--lam", type=float, default=-1, help="风险档位 λ（0.1/0.5/0.9）")
+    p.add_argument("--capital", type=float, default=0,
+                   help="目标资金规模（元，如 1000000=100万；期末持仓等比缩放到该规模，权重不变）")
     p.add_argument("--reset-positions", action="store_true",
                    help="首跑建仓：清空本地现持仓记录（差额=目标持仓全量买入；外部通道模式下使用）")
     p.set_defaults(func=cmd_run_paper)
