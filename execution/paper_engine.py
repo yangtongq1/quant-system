@@ -316,11 +316,12 @@ def execute_orders_on_channel(
     for order in sells + buys:
         code, side, volume = order["code"], order["side"], int(order["volume"])
         ref_price = float(order.get("price", 0) or 0)
-        # 限价：买入加缓冲、卖出减缓冲（防开盘跳空导致废单）
+        # 限价：买入加缓冲、卖出减缓冲（防开盘跳空废单），取整到分（合法 tick，
+        # 三位小数限价会被柜台直接拒单）
         if side == "buy":
-            limit_price = round(ref_price * (1 + price_buffer), 3)
+            limit_price = round(ref_price * (1 + price_buffer) + 0.005, 2)
         else:
-            limit_price = round(ref_price * (1 - price_buffer), 3) if ref_price > 0 else 0.0
+            limit_price = round(ref_price * (1 - price_buffer) - 0.005, 2) if ref_price > 0 else 0.0
         if limit_price <= 0:
             limit_price = 0.0  # 0 → 通道侧市价单
 
@@ -336,7 +337,8 @@ def execute_orders_on_channel(
             entry.update(status="REJECTED", reason=f"账户查询失败: {type(e).__name__}")
             report.append(entry)
             continue
-        ok, reason = rm.pre_trade_check(pv, code, side, limit_price, volume, ref_price)
+        # 风控校验用原参考价（非缓冲价，防止缓冲导致误拒）
+        ok, reason = rm.pre_trade_check(pv, code, side, ref_price or limit_price, volume, ref_price)
         if not ok:
             entry.update(status="REJECTED", reason=reason)
             report.append(entry)

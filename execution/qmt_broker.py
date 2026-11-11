@@ -165,11 +165,12 @@ class QmtBroker(BrokerAdapter):
             print(f"[qmt][DRY_RUN] {side} {code} {volume}@{price}")
             return order_id
         try:
-            # price<=0 → 市价单（L1 对手价）；否则限价单
+            # 限价单：价格必须是合法 tick（A 股股票/ETF 0.01 元），三位小数必被柜台拒绝
             if price and price > 0:
                 ptype = xtconstant.FIX_PRICE
-                px = float(price)
+                px = round(float(price), 2)
             else:
+                # 市价单：最新价转对手价（ETF/股票市价类型，5=最新价）
                 ptype = xtconstant.LATEST_PRICE
                 px = -1
             rtype = xtconstant.STOCK_BUY if side == "buy" else xtconstant.STOCK_SELL
@@ -179,9 +180,17 @@ class QmtBroker(BrokerAdapter):
                 price_type=ptype, price=px,
                 strategy_name="cross_asset", order_remark="quant-system",
             )
+            # 返回值：<0 为失败（-1 连接断开/参数非法），>0 为柜台委托号
+            if oid is None or (isinstance(oid, int) and oid < 0):
+                self.orders.append({"order_id": order_id, "code": code, "side": side,
+                                    "price": px, "volume": volume, "status": "REJECTED",
+                                    "reason": f"order_stock 返回 {oid}（连接断开/参数非法）"})
+                print(f"[qmt] 下单失败 {side} {code} {volume}@{px}: order_stock={oid}")
+                return order_id
             self.orders.append({"order_id": order_id, "code": code, "side": side,
-                                "price": price, "volume": volume,
+                                "price": px, "volume": volume,
                                 "status": "SUBMITTED", "xt_id": oid})
+            print(f"[qmt] 已委托 {side} {code} {volume}@{px} → 柜台号 {oid}")
             return order_id
         except Exception as e:  # noqa: BLE001
             self.orders.append({"order_id": order_id, "code": code, "side": side,
