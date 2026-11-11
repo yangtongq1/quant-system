@@ -38,6 +38,21 @@ def load_fundamentals() -> pd.DataFrame | None:
         return None
 
 
+def load_stock_meta() -> pd.DataFrame | None:
+    """股票元数据（stocks 表：board/is_st/status/delist_date）——稳健过滤用。"""
+    db = ROOT / "data" / "quant.db"
+    if not db.exists():
+        return None
+    try:
+        with sqlite3.connect(str(db)) as conn:
+            return pd.read_sql(
+                "SELECT code, name, board, is_st, status, delist_date FROM stocks",
+                conn,
+            )
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def load_current_positions() -> dict[str, float]:
     """数据库中的现持仓（volume，按 code）。"""
     db = ROOT / "data" / "quant.db"
@@ -146,6 +161,9 @@ def run_paper_signals(
         fundamentals=fund,
         allow_chinext=bool(strat_cfg.get("allow_chinext", True)),
         allow_star=bool(strat_cfg.get("allow_star", True)),
+        main_board_only=bool(strat_cfg.get("main_board_only", False)),
+        exclude_st=bool(strat_cfg.get("exclude_st", True)),
+        stock_meta=load_stock_meta(),
     )
 
     paper_core = getattr(broker, "paper", None)

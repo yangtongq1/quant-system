@@ -54,6 +54,9 @@ class CrossAssetStrategy(Strategy):
         fundamentals: pd.DataFrame | None = None,
         allow_chinext: bool = True,
         allow_star: bool = True,
+        main_board_only: bool = False,
+        exclude_st: bool = True,
+        stock_meta: pd.DataFrame | None = None,
     ):
         self.gold_code = gold_code
         self.nasdaq_code = nasdaq_code
@@ -67,6 +70,12 @@ class CrossAssetStrategy(Strategy):
         # 市场权限过滤（模拟账户未开通创业板/科创板权限时剔除，防废单）
         self.allow_chinext = allow_chinext   # 创业板 300/301
         self.allow_star = allow_star         # 科创板 688
+        # 稳健过滤：仅主板（沪 60x / 深 00x）+ 剔 ST + 剔退市整理股
+        self.main_board_only = main_board_only
+        self.exclude_st = exclude_st
+        # 股票元数据（stocks 表：code/name/board/is_st/status/delist_date）
+        self._stock_meta = stock_meta
+        self._excluded_codes: set[str] | None = None
 
         # 基本面（point-in-time 面板，由调用方注入；None = 纯价量模式）
         self._fund_input = fundamentals
@@ -364,6 +373,51 @@ class CrossAssetStrategy(Strategy):
             return None
         return float(np.mean(list(vals.values())))
 
+    def _load_excluded_codes(self) -> set[str]:
+        """稳健过滤：构建剔除集合（仅主板模式 + ST + 退市整理）。
+
+        元数据优先用 stocks 表（board/is_st/status/delist_date）；
+        无元数据时退化为代码前缀规则（60x 沪主板 / 00x 深主板，
+        ST 名称识别需元数据，缺失时按前缀兜底）。
+        """
+        if self._excluded_codes is not None:
+            return self._excluded_codes
+        excluded: set[str] = set()
+
+        def _is_main_board(code: str) -> bool:
+            # 沪主板 600/601/603/605，深主板 000/001/002/003；创业板/科创板/北交所均非主板
+            return code.startswith(("600", "601", "603", "605", "000", "001", "002", "003"))
+
+        if self._stock_meta is not None and len(self._stock_meta):
+            df = self._stock_meta
+            for _, row in df.iterrows():
+                code = str(row.get("code", ""))
+                if not code:
+                    continue
+                board = str(row.get("board", "")).lower()
+                if self.main_board_only and board != "main":
+                    excluded.add(code)
+                    continue
+                if self.exclude_st and (row.get("is_st") == 1 or
+                                        str(row.get("name", "")).upper().find("ST") >= 0):
+                    excluded.add(code)
+                    continue
+                # 退市整理股：名称含「退」（萃华退/退市银鸽等），柜台禁买 [251125]
+                if self.exclude_st and "退" in str(row.get("name", "")):
+                    excluded.add(code)
+                    continue
+                # 已退市/退市整理（status=delisted 或 delist_date 非空且已过）
+                status = str(row.get("status", "")).lower()
+                if status == "delisted":
+                    excluded.add(code)
+        else:
+            # 无元数据兜底：仅用代码规则
+            if self.main_board_only:
+                excluded = {c for c in self.stock_codes if not _is_main_board(c)}
+
+        self._excluded_codes = excluded
+        return excluded
+
     def select_stocks(self, date: pd.Timestamp | None = None) -> list[str]:
         """A 股 Alpha 端：多因子打分 → top N。
 
@@ -375,13 +429,19 @@ class CrossAssetStrategy(Strategy):
             return []
         self._prepare_fundamentals()
 
-        # 市场权限过滤：退市整理股一律剔除（柜台禁止买入且无投资价值）；
+        # 稳健过滤：仅主板 + 剔 ST + 剔退市整理股（元数据 stocks 表 point-in-time）；
         # 创业板/科创板按账户权限开关剔除（未开通权限必废单）
+        excluded = self._load_excluded_codes()
+
         def _market_ok(code: str) -> bool:
-            if code.startswith(("300", "301")):
-                return self.allow_chinext
-            if code.startswith("688"):
-                return self.allow_star
+            if code in excluded:
+                return False
+            if not self.main_board_only:
+                # 非仅主板模式仍按权限过滤创业板/科创板
+                if code.startswith(("300", "301")):
+                    return self.allow_chinext
+                if code.startswith("688"):
+                    return self.allow_star
             return True
 
         # 构造截面因子值：每个 code 的最新因子值

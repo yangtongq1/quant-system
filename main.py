@@ -174,10 +174,19 @@ def _make_strategy(args):
                 print("[backtest] fundamentals 表为空，选股用纯价量模式")
                 fundamentals = None
 
+        # 股票元数据（稳健过滤：仅主板 + 剔 ST + 剔退市，config.yaml 可配）
+        from execution.paper_engine import load_stock_meta
+        stock_meta = load_stock_meta()
+
         return CrossAssetStrategy(
             lam=lam,
             top_n=args.top_n or strat_cfg.get("stock_universe", 50),
             fundamentals=fundamentals,
+            allow_chinext=bool(strat_cfg.get("allow_chinext", True)),
+            allow_star=bool(strat_cfg.get("allow_star", True)),
+            main_board_only=bool(strat_cfg.get("main_board_only", False)),
+            exclude_st=bool(strat_cfg.get("exclude_st", True)),
+            stock_meta=stock_meta,
         )
     print(f"[backtest] 未知策略: {args.strategy}（可选 dual_ma / cross_asset）")
     return None
