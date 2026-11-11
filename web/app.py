@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from web.i18n import lang_selector, t
 from web.theme import (ACCENT, GOLD, NASDAQ, UP, DOWN, TEXT_DIM, inject_css,
                        kpi_card, kpi_grid)
 
@@ -21,6 +22,8 @@ st.set_page_config(page_title="QUANT TERMINAL · 金融工作台",
                    page_icon="◉", layout="wide")
 
 st.markdown(inject_css(), unsafe_allow_html=True)
+
+lang_selector("main")
 
 
 @st.cache_data(ttl=60)
