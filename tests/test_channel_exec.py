@@ -52,7 +52,7 @@ def test_sell_before_buy_order():
         {"code": "518880", "side": "sell", "volume": 5000, "price": 8.0},
     ]
     rm = RiskManager(RiskRules())
-    report = execute_orders_on_channel(broker, orders, rm, rm.rules)
+    report = execute_orders_on_channel(broker, orders, rm, rm.rules, use_live_quotes=False)
     # 先卖后买：第一笔调用必须是 sell
     assert broker.calls[0][0] == "sell"
     assert broker.calls[1][0] == "buy"
@@ -68,7 +68,7 @@ def test_etf_leg_relaxed_rules():
         {"code": "518880", "side": "buy", "volume": 300_000, "price": 8.0},  # 240万 = 24%
     ]
     rm = RiskManager(RiskRules())
-    report = execute_orders_on_channel(broker, orders, rm, rm.rules)
+    report = execute_orders_on_channel(broker, orders, rm, rm.rules, use_live_quotes=False)
     assert report[0]["status"] == "SUBMITTED"
 
     # 同样一笔在个股严规则（position 0.20）下必被拒
@@ -90,7 +90,7 @@ def test_price_buffer_applied():
         {"code": "000001", "side": "sell", "volume": 1000, "price": 10.0},
     ]
     rm = RiskManager(RiskRules())
-    report = execute_orders_on_channel(broker, orders, rm, rm.rules)
+    report = execute_orders_on_channel(broker, orders, rm, rm.rules, use_live_quotes=False)
     # 先卖后买重排：report[0]=000001 卖出（9.89），report[1]=600000 买入（10.11）
     # 取整规则：买入 ceil 到分（+0.005 后 round），卖出 floor 到分
     by_code = {(r["code"], r["side"]): r for r in report}
@@ -106,7 +106,7 @@ def test_channel_exception_recorded():
         {"code": "000001", "side": "buy", "volume": 1000, "price": 10.0},
     ]
     rm = RiskManager(RiskRules())
-    report = execute_orders_on_channel(broker, orders, rm, rm.rules)
+    report = execute_orders_on_channel(broker, orders, rm, rm.rules, use_live_quotes=False)
     assert report[0]["status"] == "REJECTED"
     assert "RuntimeError" in report[0]["reason"]
     assert report[1]["status"] == "SUBMITTED"

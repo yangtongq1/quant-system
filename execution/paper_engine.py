@@ -274,6 +274,7 @@ def execute_orders_on_channel(
     base_rules,
     etf_codes: tuple[str, ...] = ("518880", "513100"),
     price_buffer: float = 0.01,
+    use_live_quotes: bool = True,
 ) -> list[dict]:
     """把调仓单发往外部通道（QMT/掘金/SuperMind）真实委托。
 
@@ -313,9 +314,37 @@ def execute_orders_on_channel(
     sells = [o for o in orders if o["side"] == "sell"]
     buys = [o for o in orders if o["side"] == "buy"]
 
+    # ── 实时行情覆盖（防隔日价格漂移：重放收盘价与今日实价可能差 3-5%，──
+    # ── 旧价+1% 缓冲的限价根本买不进；有实时行情源时用对手价）──
+    live_prices: dict[str, float] = {}
+    if use_live_quotes:
+        try:
+            from xtquant import xtdata
+
+            def _sym(code: str) -> str:
+                if code.startswith(("6", "9", "5")):
+                    return f"{code}.SH"
+                if code.startswith(("0", "3", "1")):
+                    return f"{code}.SZ"
+                return f"{code}.BJ"
+
+            syms = [_sym(o["code"]) for o in orders]
+            ticks = xtdata.get_full_tick(syms) or {}
+            for sym, d in ticks.items():
+                if not d:
+                    continue
+                code = sym.split(".")[0]
+                ask1 = (d.get("askPrice") or [0])[0]
+                bid1 = (d.get("bidPrice") or [0])[0]
+                last = d.get("lastPrice") or 0
+                # 通用参考价：优先盘口，退化到最新价
+                live_prices[code] = float(ask1 or bid1 or last or 0)
+        except ImportError:
+            pass  # 无 xtquant（掘金/SuperMind 通道）：沿用重放价
+
     for order in sells + buys:
         code, side, volume = order["code"], order["side"], int(order["volume"])
-        ref_price = float(order.get("price", 0) or 0)
+        ref_price = float(live_prices.get(code) or order.get("price", 0) or 0)
         # 限价：买入加缓冲、卖出减缓冲（防开盘跳空废单），取整到分（合法 tick，
         # 三位小数限价会被柜台直接拒单）
         if side == "buy":
