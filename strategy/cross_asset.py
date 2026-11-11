@@ -52,6 +52,8 @@ class CrossAssetStrategy(Strategy):
         momentum_window: int = 60,
         stock_codes: list[str] | None = None,
         fundamentals: pd.DataFrame | None = None,
+        allow_chinext: bool = True,
+        allow_star: bool = True,
     ):
         self.gold_code = gold_code
         self.nasdaq_code = nasdaq_code
@@ -62,6 +64,9 @@ class CrossAssetStrategy(Strategy):
         self.lookback = lookback
         self.momentum_window = momentum_window
         self.stock_codes = stock_codes or []
+        # 市场权限过滤（模拟账户未开通创业板/科创板权限时剔除，防废单）
+        self.allow_chinext = allow_chinext   # 创业板 300/301
+        self.allow_star = allow_star         # 科创板 688
 
         # 基本面（point-in-time 面板，由调用方注入；None = 纯价量模式）
         self._fund_input = fundamentals
@@ -370,9 +375,20 @@ class CrossAssetStrategy(Strategy):
             return []
         self._prepare_fundamentals()
 
+        # 市场权限过滤：退市整理股一律剔除（柜台禁止买入且无投资价值）；
+        # 创业板/科创板按账户权限开关剔除（未开通权限必废单）
+        def _market_ok(code: str) -> bool:
+            if code.startswith(("300", "301")):
+                return self.allow_chinext
+            if code.startswith("688"):
+                return self.allow_star
+            return True
+
         # 构造截面因子值：每个 code 的最新因子值
         scores: dict[str, dict] = {}
         for code, s in self._stock_close.items():
+            if not _market_ok(code):
+                continue
             if len(s) < 120:
                 continue
             # 纯 Python 计算尾部因子值（避免整列 pct_change 的开销）
@@ -434,7 +450,10 @@ class CrossAssetStrategy(Strategy):
         if abs(diff) < band * max(target_value, cur_value, 1.0):
             return
 
-        lots = int(abs(diff) / price / 100) * 100
+        # 手数规则：科创板最低 200 股、其余 100 股（柜台硬性校验，
+        # 100 股的科创板单必废 [120156]）
+        lot = 200 if code.startswith("688") else 100
+        lots = int(abs(diff) / price / lot) * lot
         if lots <= 0:
             return
         if diff > 0:

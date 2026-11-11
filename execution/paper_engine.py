@@ -144,6 +144,8 @@ def run_paper_signals(
         top_n=top_n,
         stock_codes=[c for c in bars if c not in ("518880", "513100")],
         fundamentals=fund,
+        allow_chinext=bool(strat_cfg.get("allow_chinext", True)),
+        allow_star=bool(strat_cfg.get("allow_star", True)),
     )
 
     paper_core = getattr(broker, "paper", None)

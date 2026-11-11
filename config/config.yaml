@@ -21,6 +21,8 @@ strategy:                   # 跨资产对冲配置
     nasdaq: 0.2
   lambda_risk: 0.5          # 风险档位 λ（0.1 稳健 / 0.5 平衡 / 0.9 进取）
   stock_universe: 100       # 股票池 top N
+  allow_chinext: true       # 创业板 300/301（账户未开通创业板权限时改 false，防废单）
+  allow_star: true          # 科创板 688（账户未开通科创板权限时改 false，防废单）
 
 risk:                       # 风控阈值
   max_position_pct: 0.20    # 单标的持仓上限
