@@ -81,7 +81,10 @@ class AkshareFetcher(DataFetcher):
             hfq["date"] = pd.to_datetime(hfq["date"])
             merged = raw.merge(hfq, on="date", how="left")
             merged["adj_factor"] = merged["close_hfq"] / merged["close"]
-            merged["adj_factor"] = merged["adj_factor"].fillna(1.0)
+            # 关键防御：hfq 当日数据未生成时 merge 缺失 → 因子塌成 1.0，
+            # 会把最后一天价格/因子计算放大百倍（踩坑实录：511 只中招）。
+            # 用「前值填充」：最新一天因子沿用昨日（复权因子日间变化极小）。
+            merged["adj_factor"] = merged["adj_factor"].ffill().fillna(1.0)
             merged = merged.drop(columns=["close_hfq"])
             return merged.reset_index(drop=True)
 

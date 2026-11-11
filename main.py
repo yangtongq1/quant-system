@@ -536,6 +536,8 @@ def cmd_run_paper(args):
     use_supermind = getattr(args, "supermind", False)
     use_qmt = getattr(args, "qmt", False)
     use_gmtrade = getattr(args, "gmtrade", False)
+    reset_positions = getattr(args, "reset_positions", False)
+    external = None  # 外部通道 broker（QMT/掘金/SuperMind）：订单需真实委托
     broker = None
     if use_gmtrade:
         # gmtrade 仅支持 Python 3.6–3.10；主力 3.13 环境自动切换 py310 重启自身
@@ -559,6 +561,7 @@ def cmd_run_paper(args):
         else:
             # 风控同样注入掘金执行链（红线：真实委托前强制校验）
             broker.risk_manager = risk_manager
+            external = broker
     if use_qmt:
         from execution.qmt_broker import QmtBroker
         broker = QmtBroker()
@@ -569,6 +572,7 @@ def cmd_run_paper(args):
         else:
             # 风控同样注入 QMT 执行链（红线：真实委托前强制校验）
             broker.risk_manager = risk_manager
+            external = broker
     if use_supermind and broker is None:
         broker = SuperMindBroker()
         if broker.dry_run:
@@ -578,6 +582,7 @@ def cmd_run_paper(args):
         else:
             # 风控同样注入 SuperMind 执行链（红线：真实委托前强制校验）
             broker.risk_manager = risk_manager
+            external = broker
     if broker is None:
         broker = PaperBrokerAdapter(initial_cash=1_000_000.0, risk_manager=risk_manager)
     exec_name = ("掘金仿真" if use_gmtrade else
@@ -587,15 +592,29 @@ def cmd_run_paper(args):
     print(f"[run-paper] 执行器：{exec_name}"
           f"（dry_run={getattr(broker, 'dry_run', False)}）")
 
+    if external is not None and reset_positions:
+        # 首跑建仓：清空本地现持仓 → 差额 = 目标持仓全量买入
+        from execution.paper_engine import reset_current_positions
+        reset_current_positions()
+        print("[run-paper] --reset-positions：已清空本地现持仓（首跑建仓，差额=全买入）")
+
     result = run_paper_signals(
         broker,
         top_n=getattr(args, "top_n", None) or 30,
         lam=getattr(args, "lam", None) if getattr(args, "lam", -1) >= 0 else None,
     )
 
+    exec_report = None
+    if external is not None and result["orders"]:
+        # 外部通道：调仓单真实委托（先卖后买 + 风控路由 + 限价缓冲）
+        from execution.paper_engine import execute_orders_on_channel
+        exec_report = execute_orders_on_channel(
+            external, result["orders"], risk_manager, rules,
+        )
+
     from data.storage import Storage
     storage = Storage(str(ROOT / "data" / "quant.db"), str(ROOT / "data" / "bars"))
-    persist_paper_state(broker, result, storage)
+    persist_paper_state(broker, result, storage, exec_report=exec_report)
 
     print(f"[run-paper] 重放至 {result['last_date']}（λ={result['lam']} top{result['top_n']}，"
           f"池 {result['n_bars']} 只，期末净值 {result['equity']:,.0f}）")
@@ -604,6 +623,16 @@ def cmd_run_paper(args):
         print(f"    {o['side']:4s} {o['code']} {o['volume']} @ {o['price']:.3f}")
     if not result["orders"]:
         print("    （目标持仓与现持仓一致，无调仓）")
+    if exec_report:
+        n_sub = sum(1 for r in exec_report if r["status"] == "SUBMITTED")
+        n_rej = sum(1 for r in exec_report if r["status"] == "REJECTED")
+        print(f"[run-paper] 通道执行：{n_sub} 笔已委托，{n_rej} 笔被风控拒绝：")
+        for r in exec_report:
+            tag = {"SUBMITTED": "已委托", "REJECTED": "风控拒绝"}.get(r["status"], r["status"])
+            line = f"    {r['side']:4s} {r['code']} {r['volume']} @ {r['price'] or '市价'} → {tag}"
+            if r["reason"]:
+                line += f"（{r['reason']}）"
+            print(line)
     # 风控事件回显（拒绝/拦截留痕）
     risk_events = getattr(risk_manager, "events", [])
     if risk_events:
@@ -735,6 +764,8 @@ def main():
                    help="用掘金量化仿真盘（gmtrade，免费网页注册，优先于 --qmt/--supermind；需 py310）")
     p.add_argument("--top-n", type=int, default=30, help="持股数")
     p.add_argument("--lam", type=float, default=-1, help="风险档位 λ（0.1/0.5/0.9）")
+    p.add_argument("--reset-positions", action="store_true",
+                   help="首跑建仓：清空本地现持仓记录（差额=目标持仓全量买入；外部通道模式下使用）")
     p.set_defaults(func=cmd_run_paper)
 
     p = sub.add_parser("sm-status", help="SuperMind 连接诊断（SDK/账号/客户端状态）")

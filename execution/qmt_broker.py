@@ -95,17 +95,47 @@ class QmtBroker(BrokerAdapter):
     def _connect(self, session_id: int | None = None):
         """连接 miniQMT（客户端须已启动并登录）。"""
         from xtquant.xttrader import XtQuantTrader
+        from xtquant.xttype import StockAccount
         # session_id：同一进程内唯一即可；不传用时间戳派生
         sid = session_id or int(datetime.now().strftime("%H%M%S"))
         self.trader = XtQuantTrader(self.qmt_path, sid)
-        # 注意：新版 xtquant（250807+）start() 无返回值（None）；
-        # 旧版返回 0 表示成功。None/0 都视为启动成功。
+        # 新版 xtquant（250807+）：start() 无返回值、connect() 无参、
+        # 账号用 StockAccount 对象传入 subscribe()；旧版 connect(account_id)。
         started = self.trader.start()
         if started not in (None, 0):
             raise RuntimeError(f"XtQuantTrader.start() 失败：{started}（miniQMT 未启动？）")
-        if not self.trader.connect(self.account):
-            raise RuntimeError(f"connect({self.account}) 失败（账号未登录？）")
+        import inspect
+        n_params = len(inspect.signature(self.trader.connect).parameters)  # 含 self
+        if n_params >= 2:
+            # 旧版 API：connect(account_id)
+            ok = self.trader.connect(self.account)
+        else:
+            # 新版 API：connect() + subscribe(StockAccount)
+            ok = self.trader.connect()
+        if ok not in (None, 0):
+            raise RuntimeError(f"connect() 失败：{ok}（miniQMT 未启动？）")
+        self._account_obj = None
+        # 订阅账号：东莞等券商柜台内部账号不带前导零（002038046455 → 2038046455）。
+        # 两种形式都试，谁成功用谁。
+        for acc_id in dict.fromkeys([self.account, self.account.lstrip("0")]):
+            if not acc_id:
+                continue
+            try:
+                cand = StockAccount(acc_id)
+                if self.trader.subscribe(cand) == 0:
+                    self._account_obj = cand
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+        if self._account_obj is None:
+            # 订阅失败不阻断（查询/下单仍可尝试；留错误给 status()）
+            self._account_obj = StockAccount(self.account)
         self._XtQuantTrader = XtQuantTrader
+
+    @property
+    def account_id(self) -> str:
+        """实际订阅成功的账号 ID（去前导零后的内部账号）。"""
+        return getattr(self._account_obj, "account_id", self.account)
 
     def _symbol(self, code: str) -> str:
         """600519 → 600519.SH；000001 → 000001.SZ；其余 → .BJ。"""
@@ -139,8 +169,8 @@ class QmtBroker(BrokerAdapter):
                 ptype = xtconstant.LATEST_PRICE
                 px = -1
             rtype = xtconstant.STOCK_BUY if side == "buy" else xtconstant.STOCK_SELL
-            oid = self.trader.orderStock(
-                account=self.account, stock_code=self._symbol(code),
+            oid = self.trader.order_stock(
+                account=self._account_obj, stock_code=self._symbol(code),
                 order_type=rtype, order_volume=int(volume),
                 price_type=ptype, price=px,
                 strategy_name="cross_asset", order_remark="quant-system",
@@ -159,8 +189,7 @@ class QmtBroker(BrokerAdapter):
         if self.dry_run or self.trader is None:
             return False
         try:
-            # order_id 为本类生成；xt 委托号在 get_orders 里查
-            return bool(self.trader.cancelOrderStock(self.account, int(order_id)))
+            return bool(self.trader.cancel_order_stock(self._account_obj, int(order_id)))
         except Exception:  # noqa: BLE001
             return False
 
@@ -168,7 +197,7 @@ class QmtBroker(BrokerAdapter):
         if self.dry_run or self.trader is None:
             return []
         try:
-            return list(self.trader.queryStockOrders(self.account) or [])
+            return list(self.trader.query_stock_orders(self._account_obj) or [])
         except Exception:  # noqa: BLE001
             return []
 
@@ -176,7 +205,7 @@ class QmtBroker(BrokerAdapter):
         if self.dry_run or self.trader is None:
             return []
         try:
-            return list(self.trader.queryStockTrades(self.account) or [])
+            return list(self.trader.query_stock_trades(self._account_obj) or [])
         except Exception:  # noqa: BLE001
             return []
 
@@ -184,7 +213,7 @@ class QmtBroker(BrokerAdapter):
         if self.dry_run or self.trader is None:
             return []
         try:
-            return list(self.trader.queryStockPositions(self.account) or [])
+            return list(self.trader.query_stock_positions(self._account_obj) or [])
         except Exception:  # noqa: BLE001
             return []
 
@@ -193,18 +222,18 @@ class QmtBroker(BrokerAdapter):
             return {"dry_run": True, "account": self.account,
                     "error": self.last_error or "未连接"}
         try:
-            a = self.trader.queryStockAsset(self.account)
+            a = self.trader.query_stock_asset(self._account_obj)
             if a is None:
-                return {"account": self.account, "error": "查询失败"}
+                return {"account": self.account_id, "error": "查询失败"}
             return {
                 "available_cash": getattr(a, "cash", None),
                 "market_value": getattr(a, "market_value", None),
                 "frozen_cash": getattr(a, "frozen_cash", None),
                 "total_value": getattr(a, "total_asset", None),
-                "account": self.account,
+                "account": self.account_id,
             }
         except Exception:  # noqa: BLE001
-            return {"account": self.account, "error": "asset 查询失败"}
+            return {"account": self.account_id, "error": "asset 查询失败"}
 
     def status(self) -> dict:
         """连接状态一览（控制台/诊断用）。"""

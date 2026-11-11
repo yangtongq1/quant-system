@@ -53,6 +53,36 @@ def load_current_positions() -> dict[str, float]:
         return {}
 
 
+def reset_current_positions() -> None:
+    """清空数据库现持仓（首跑建仓用：差额 = 目标持仓全量买入）。"""
+    db = ROOT / "data" / "quant.db"
+    if not db.exists():
+        return
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("DELETE FROM positions")
+        conn.commit()
+
+
+# ETF 腿风控规则：放宽单标的/单笔上限（黄金/纳指目标权重 10%~70%，动态权重
+# 裁剪范围），个股维持默认严规则（max_position_pct=0.20 / max_order_pct=0.05）。
+def _etf_risk_rules(base: "RiskRules", strict_etf: bool = False) -> "RiskRules":
+    from risk.manager import RiskRules
+    if strict_etf:
+        return base
+    return RiskRules(
+        max_position_pct=0.75,   # ETF 权重裁剪上限 70%，留缓冲
+        max_order_pct=0.80,     # ETF 单腿调仓可达总资产的 70%
+        max_drawdown=base.max_drawdown,
+        max_single_stock_pct=base.max_single_stock_pct,
+        price_deviation=base.price_deviation,
+        max_orders_per_day=base.max_orders_per_day,
+    )
+
+
+def _now_date() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
 def run_paper_signals(
     broker,
     initial_cash: float = 1_000_000.0,
@@ -125,8 +155,10 @@ def run_paper_signals(
     last_date = str(result.equity.index[-1].date()) if len(result.equity) else "—"
 
     # ── 3. 与现持仓求差额 → 调仓单 ──
+    # 订单价格用「不复权真实价」（真实委托发往 QMT/掘金柜台，真实价撮合；
+    # 后复权价只用于策略内部因子计算——两套口径，绝不混淆）
     latest_close = {
-        code: float(df["close"].iloc[-1] * float(df["adj_factor"].iloc[-1] or 1.0))
+        code: float(df["close"].iloc[-1])
         for code, df in bars.items()
     }
     current = load_current_positions()
@@ -159,19 +191,31 @@ def run_paper_signals(
     }
 
 
-def persist_paper_state(broker, result: dict, storage: "Storage"):
-    """订单/持仓/账户快照入库（幂等：主键 OR REPLACE）+ 重放成交流水入库。"""
+def persist_paper_state(broker, result: dict, storage: "Storage", exec_report: list | None = None):
+    """订单/持仓/账户快照入库（幂等：主键 OR REPLACE）+ 重放成交流水入库。
+
+    exec_report：外部通道（QMT/掘金/SuperMind）执行报告——订单状态写
+    SUBMITTED/REJECTED（真实委托语义）而非本地撮合的 FILLED。
+    """
     now = datetime.now().isoformat(timespec="seconds")
     conn = sqlite3.connect(str(ROOT / "data" / "quant.db"))
     cur = conn.cursor()
+    # 外部通道执行状态（code+side 匹配；无报告则本地语义 FILLED）
+    exec_status = {}
+    if exec_report:
+        for r in exec_report:
+            exec_status[(r["code"], r["side"])] = (r["status"], r.get("reason", ""))
     for i, o in enumerate(result.get("orders", [])):
         oid = f"PP-{now.replace(':', '').replace('-', '')}-{i:03d}"
+        status, reason = exec_status.get((o["code"], o["side"]), ("FILLED", ""))
+        if reason:
+            status = f"{status}:{reason[:60]}"
         cur.execute(
             "INSERT OR REPLACE INTO orders "
             "(order_id, code, side, price, volume, status, create_time, update_time, strategy) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (oid, o["code"], o["side"], float(o.get("price", 0)),
-             int(o.get("volume", 0)), "FILLED", now, now, "cross_asset"),
+             int(o.get("volume", 0)), status, now, now, "cross_asset"),
         )
     # 目标持仓覆盖式写入（最新快照语义）
     cur.execute("DELETE FROM positions")
@@ -206,3 +250,95 @@ def persist_paper_state(broker, result: dict, storage: "Storage"):
                 )
     conn.commit()
     conn.close()
+
+
+def execute_orders_on_channel(
+    broker,
+    orders: list[dict],
+    risk_manager,
+    base_rules,
+    etf_codes: tuple[str, ...] = ("518880", "513100"),
+    price_buffer: float = 0.01,
+) -> list[dict]:
+    """把调仓单发往外部通道（QMT/掘金/SuperMind）真实委托。
+
+    执行顺序：先卖后买（卖出回笼资金供买入）。
+    风控路由：ETF 腿（518880/513100）用放宽规则（权重 10%~70% 属策略
+    设计），个股用默认严规则；每单事前校验（红线：真实委托前强制风控）。
+    限价单：重放收盘价 ± price_buffer 缓冲（防开盘跳空废单）。
+
+    返回执行报告 [{code, side, volume, price, status, reason}]。
+    """
+    from risk.manager import RiskManager, RiskRules  # noqa: F401
+
+    report: list[dict] = []
+    if not orders:
+        return report
+
+    etf_rules = _etf_risk_rules(base_rules)
+    etf_set = set(etf_codes)
+
+    # 组合视图（动态更新：卖出后资金回笼计入可买额度）
+    def portfolio_view() -> dict:
+        acc = broker.get_account()
+        cash = float(acc.get("available_cash") or acc.get("cash") or 0.0)
+        total = float(acc.get("total_value") or acc.get("total_asset") or 0.0)
+        if total <= 0:
+            total = cash
+        positions = {}
+        for p in broker.get_positions():
+            code = str(getattr(p, "code", "")).split(".")[0]
+            positions[code] = {
+                "volume": int(getattr(p, "volume", 0) or 0),
+                "available": int(getattr(p, "can_use_volume", getattr(p, "available", 0)) or 0),
+                "avg_cost": float(getattr(p, "open_price", getattr(p, "avg_cost", 0)) or 0),
+            }
+        return {"cash": cash, "total_asset": max(total, cash), "positions": positions}
+
+    sells = [o for o in orders if o["side"] == "sell"]
+    buys = [o for o in orders if o["side"] == "buy"]
+
+    for order in sells + buys:
+        code, side, volume = order["code"], order["side"], int(order["volume"])
+        ref_price = float(order.get("price", 0) or 0)
+        # 限价：买入加缓冲、卖出减缓冲（防开盘跳空导致废单）
+        if side == "buy":
+            limit_price = round(ref_price * (1 + price_buffer), 3)
+        else:
+            limit_price = round(ref_price * (1 - price_buffer), 3) if ref_price > 0 else 0.0
+        if limit_price <= 0:
+            limit_price = 0.0  # 0 → 通道侧市价单
+
+        rules = etf_rules if code in etf_set else base_rules
+        rm = risk_manager if code not in etf_set else RiskManager(etf_rules)
+
+        entry = {"code": code, "side": side, "volume": volume,
+                 "price": limit_price, "status": "SKIPPED", "reason": ""}
+        # 事前风控（组合视图动态更新：卖出回笼资金计入可买额度）
+        try:
+            pv = portfolio_view()
+        except Exception as e:  # noqa: BLE001
+            entry.update(status="REJECTED", reason=f"账户查询失败: {type(e).__name__}")
+            report.append(entry)
+            continue
+        ok, reason = rm.pre_trade_check(pv, code, side, limit_price, volume, ref_price)
+        if not ok:
+            entry.update(status="REJECTED", reason=reason)
+            report.append(entry)
+            continue
+        ok2, reason2 = rm.check_frequency(_now_date())
+        if not ok2:
+            entry.update(status="REJECTED", reason=reason2)
+            report.append(entry)
+            continue
+        # 下单（通道实现负责真实委托；DRY_RUN 时仅本地记录）
+        try:
+            if side == "buy":
+                broker.buy(code, limit_price, volume)
+            else:
+                broker.sell(code, limit_price, volume)
+            entry.update(status="SUBMITTED")
+        except Exception as e:  # noqa: BLE001
+            entry.update(status="REJECTED", reason=f"{type(e).__name__}: {str(e)[:100]}")
+        report.append(entry)
+    return report
