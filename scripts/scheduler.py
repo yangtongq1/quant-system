@@ -75,7 +75,17 @@ def step_fetch_recent(days: int = 10) -> bool:
                 merged = pd.concat([old, raw], ignore_index=True) if old is not None and len(old) else raw
                 merged["date"] = pd.to_datetime(merged["date"])
                 merged = merged.drop_duplicates(subset="date", keep="last").sort_values("date")
-                merged["adj_factor"] = merged.get("adj_factor", 1.0)
+                # 红线防御：with_adj_factor=False 的新行因子=1.0，直接合并会把
+                # 复权因子塌成 1（真实踩坑：000534 因子 4.29→1.0，放大/缩小百倍）。
+                # 修法：新行因子视为缺失，合并后按时间 ffill 继承旧因子。
+                if old is not None and len(old):
+                    old_dates = set(pd.to_datetime(old["date"]))
+                    new_mask = merged["date"].isin(old_dates) == False  # noqa: E712
+                    merged.loc[new_mask, "adj_factor"] = float("nan")
+                    merged["adj_factor"] = pd.to_numeric(merged["adj_factor"], errors="coerce")
+                    merged["adj_factor"] = merged["adj_factor"].ffill().fillna(1.0)
+                else:
+                    merged["adj_factor"] = merged.get("adj_factor", 1.0)
                 storage.save_bars(code, merged)
             ok += 1
         except Exception as e:  # noqa: BLE001
