@@ -50,16 +50,15 @@ def load_names() -> dict:
 
 @st.cache_data(ttl=30)
 def last_price(code: str) -> float | None:
-    """最新收盘价（复权）"""
+    """最新收盘价（原始价——与真实持仓股数/成本价同口径，算市值/盈亏用）"""
     p = ROOT / "data" / "bars" / f"{code}.parquet"
     if not p.exists():
         return None
     try:
-        df = pd.read_parquet(p, columns=["close", "adj_factor"])
+        df = pd.read_parquet(p, columns=["close"])
         if not len(df):
             return None
-        r = df.iloc[-1]
-        return float(r["close"] * r.get("adj_factor", 1.0))
+        return float(df["close"].iloc[-1])
     except Exception:  # noqa: BLE001
         return None
 
@@ -139,7 +138,7 @@ with tabs[0]:
         st.markdown(f'<div class="panel-title">{t("持仓明细")} / DETAIL</div>',
                     unsafe_allow_html=True)
         st.dataframe(df, use_container_width=True, hide_index=True, on_select="ignore")
-        tabs[0].caption(f"{len(df)} 条持仓 · 市值按最新收盘价（复权）计算 · 30 秒缓存自动刷新")
+        tabs[0].caption(f"{len(df)} 条持仓 · 市值按最新收盘价（原始价）计算 · 30 秒缓存自动刷新")
 
 # ── Tab 2/3: 订单 / 成交流水 ──
 for tab, table in zip(tabs[1:], ["orders", "trades"]):

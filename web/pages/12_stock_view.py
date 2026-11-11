@@ -95,15 +95,20 @@ def load_my_trades(code: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def load_bars(code: str) -> pd.DataFrame:
+    """加载K线：展示用原始价格（行情软件口径）；adj_* 列另存复权序列（算涨跌幅用）。
+
+    复权序列用途：近1年涨跌/52周高低等区间指标——原始价遇除权会跳空失真。
+    """
     p = ROOT / "data" / "bars" / f"{code}.parquet"
     if not p.exists():
         return pd.DataFrame()
     try:
         df = pd.read_parquet(p)
         df["date"] = pd.to_datetime(df["date"])
-        # 后复权价格
-        for c in ("open", "high", "low", "close", "prev_close"):
-            df[c] = df[c] * df["adj_factor"]
+        # 原始价格保留 open/high/low/close（展示口径）
+        # 复权序列存到 adj_close/adj_high/adj_low（计算口径）
+        for c in ("close", "high", "low"):
+            df[f"adj_{c}"] = df[c] * df["adj_factor"]
         return df.sort_values("date").reset_index(drop=True)
     except Exception:  # noqa: BLE001
         return pd.DataFrame()
@@ -144,14 +149,15 @@ if bars.empty:
 
 n_show = len(bars) if window == "全部" else int(window)
 d = bars.tail(n_show).copy().reset_index(drop=True)
-adj_last = float(bars["close"].iloc[-1])
+last_price = float(bars["close"].iloc[-1])          # 原始价（展示口径）
+adj_last = float(bars["adj_close"].iloc[-1])        # 复权价（计算口径）
 
 # ── KPI ──
 w52 = bars.tail(252)
-hi52 = float(w52["high"].max())
-lo52 = float(w52["low"].min())
+hi52 = float(w52["adj_high"].max())   # 复权口径（跨除权不失真）
+lo52 = float(w52["adj_low"].min())
 if len(w52) >= 232:  # 约满一年
-    y1_chg = adj_last / float(w52["close"].iloc[0]) - 1
+    y1_chg = adj_last / float(w52["adj_close"].iloc[0]) - 1
 else:
     y1_chg = None
 my_trades = load_my_trades(code)
@@ -159,15 +165,15 @@ buy_amt = my_trades.loc[my_trades["side"] == "buy", "volume"].sum() if not my_tr
 sell_amt = my_trades.loc[my_trades["side"] == "sell", "volume"].sum() if not my_trades.empty else 0
 row = pos[pos["code"] == code]
 cost = float(row["avg_cost"].iloc[0]) if len(row) else None
-pnl = (adj_last / cost - 1) if cost else None
+pnl = (last_price / cost - 1) if cost else None   # 原始价 vs 真实成本价
 
 cards = [
-    kpi_card(t("最新价"), f"{adj_last:.3f}", t("后复权"),
-             cls="kpi-up" if (y1_chg or 0) >= 0 else "kpi-down"),
-    kpi_card(t("52周最高"), f"{hi52:.2f}", t("后复权")),
-    kpi_card(t("52周最低"), f"{lo52:.2f}", t("后复权")),
+    kpi_card(t("最新价"), f"{last_price:.2f}", t("原始价")),
+    kpi_card(t("52周最高"), f"{hi52:.2f}", t("复权价")),
+    kpi_card(t("52周最低"), f"{lo52:.2f}", t("复权价")),
     kpi_card(t("近1年涨跌"), f"{y1_chg:.2%}" if y1_chg is not None else "—",
-             t("不足一年") if y1_chg is None else "",),
+             t("不足一年") if y1_chg is None else "",
+             cls="kpi-up" if (y1_chg or 0) >= 0 else "kpi-down"),
 ]
 if pnl is not None:
     cards.append(kpi_card(t("持仓盈亏"), f"{pnl:.2%}",
@@ -186,7 +192,7 @@ import plotly.graph_objects as go
 
 fig = charts.candlestick(d, title="")
 
-# 均线（后复权收盘）
+# 均线（原始收盘价——与K线同口径）
 for w, colr in ((5, GOLD), (20, ACCENT), (60, "#94A3B8")):
     ma = d["close"].rolling(w).mean()
     fig.add_trace(go.Scatter(
@@ -238,7 +244,7 @@ fig.update_layout(showlegend=True, legend=dict(
 st.plotly_chart(fig, use_container_width=True)
 
 st.caption(f"{t('数据区间')} {d['date'].iloc[0]:%Y-%m-%d} ~ {d['date'].iloc[-1]:%Y-%m-%d} · "
-           f"{len(d)} {t('个交易日')} · {t('后复权')} · "
+           f"{len(d)} {t('个交易日')} · {t('原始价')} · "
           f"{t('买卖点标注')}: {len(my_trades)} {t('笔')}（买 {int(buy_amt)} / 卖 {int(sell_amt)}）")
 
 # ── 我方成交流水明细 ──

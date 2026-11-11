@@ -157,6 +157,8 @@ _EN: dict[str, str] = {
     "笔": "trades",
     "可用现金": "Available Cash",
     "账户余额": "Account Balance",
+    "原始价": "Raw Price",
+    "复权价": "Adjusted Price",
 }
 
 
