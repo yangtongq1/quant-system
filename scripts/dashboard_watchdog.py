@@ -41,20 +41,48 @@ def log(msg: str) -> None:
 
 
 def start_dashboard() -> subprocess.Popen | None:
-    """启动看板（找不到已监听进程时）。返回 Popen 或 None（已有人在跑）。"""
+    """启动看板（找不到已监听进程时）。返回 Popen 或 None（已有人在跑/WMI 通道）。
+
+    Windows 沙箱环境：subprocess 子进程会被 job object 回收（DETACHED 也躲不过，
+    BREAKAWAY 权限被拒）。改走 WMI Win32_Process.Create——进程宿主在
+    Wmiprvse 服务，不在沙箱 job 内，工具调用结束后持续存活。
+    """
     if port_in_use(PORT):
         return None
-    cmd = [sys.executable, "-m", "streamlit", "run", "web/app.py",
-           "--server.port", str(PORT), "--server.headless", "true"]
+    cmd = f'"{sys.executable}" -m streamlit run web/app.py ' \
+          f'--server.port {PORT} --server.headless true'
+    # 注意：WMI Create 无 shell，不支持 > 重定向（带 > 会导致参数错乱进程退出）。
+    # streamlit 输出走自身 logger；此处不重定向。
+    try:
+        try:
+            import win32com.client
+            svc = win32com.client.Dispatch("WbemScripting.SWbemLocator")
+            svcm = svc.ConnectServer(".", "root/cimv2")
+            obj = svcm.Get("Win32_Process")
+            method = obj.Methods_("Create")
+            inp = method.InParameters.SpawnInstance_()
+            inp.Properties_("CommandLine").Value = cmd
+            inp.Properties_("CurrentDirectory").Value = str(ROOT)
+            out = obj.ExecMethod_("Create", inp)
+            if out.ReturnValue == 0:
+                log(f"看板已启动 PID {out.ProcessId}（WMI 通道，端口 {PORT}）")
+                return None
+            log(f"WMI 启动失败 ReturnCode={out.ReturnValue}，回退 subprocess")
+        except ImportError:
+            log("pywin32 未安装，回退 subprocess")
+    except Exception as e:  # noqa: BLE001
+        log(f"WMI 通道异常: {type(e).__name__}: {e}")
+    # 回退：传统 subprocess（非沙箱环境下可用）
     proc = subprocess.Popen(
-        cmd, cwd=str(ROOT),
+        [sys.executable, "-m", "streamlit", "run", "web/app.py",
+         "--server.port", str(PORT), "--server.headless", "true"],
+        cwd=str(ROOT),
         stdout=open(ROOT / "logs" / "streamlit.log", "ab"),
         stderr=open(ROOT / "logs" / "streamlit_err.log", "ab"),
-        # Windows 下脱离控制台进程组：父进程退出不影响子进程
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
         close_fds=True,
     )
-    log(f"看板已启动 PID {proc.pid}（端口 {PORT}）")
+    log(f"看板已启动 PID {proc.pid}（subprocess 通道，端口 {PORT}）")
     return proc
 
 
@@ -75,7 +103,7 @@ def run_forever(interval: int = 30) -> None:
                         log(f"端口被占但 HTTP 连续 {fail_streak} 次不健康：{who_owns_port(PORT)}")
             else:
                 log(f"看板未监听（占用方：{who_owns_port(PORT)}），重新拉起")
-                proc = start_dashboard()
+                proc = start_dashboard() or proc
                 fail_streak = 0
                 # 给看板 10s 启动时间，下轮再验
             if proc is not None and proc.poll() is not None:
