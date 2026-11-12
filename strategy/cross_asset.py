@@ -57,6 +57,9 @@ class CrossAssetStrategy(Strategy):
         main_board_only: bool = False,
         exclude_st: bool = True,
         stock_meta: pd.DataFrame | None = None,
+        rebalance_freq: str = "monthly",
+        select_refresh_days: int = 5,
+        max_buy_2d_pct: float = 0.0,
     ):
         self.gold_code = gold_code
         self.nasdaq_code = nasdaq_code
@@ -73,6 +76,13 @@ class CrossAssetStrategy(Strategy):
         # 稳健过滤：仅主板（沪 60x / 深 00x）+ 剔 ST + 剔退市整理股
         self.main_board_only = main_board_only
         self.exclude_st = exclude_st
+        # 调仓频率：monthly（月末）/ daily（每日）。
+        # 日频模式 select_refresh_days 控制选股池刷新周期（全池选股开销大，
+        # 因子以 20/60/120 日窗口为主，日日重选意义有限 → 默认 5 天刷新）
+        self.rebalance_freq = rebalance_freq
+        self.select_refresh_days = max(1, int(select_refresh_days))
+        # 近两日累计买入金额上限（占总资产比例；0=不限）——建仓平滑/防无止境买入
+        self.max_buy_2d_pct = float(max_buy_2d_pct or 0.0)
         # 股票元数据（stocks 表：code/name/board/is_st/status/delist_date）
         self._stock_meta = stock_meta
         self._excluded_codes: set[str] | None = None
@@ -89,6 +99,11 @@ class CrossAssetStrategy(Strategy):
         self._stock_dates: list = []
         self._last_rebalance_month: tuple | None = None
         self._last_check_date: pd.Timestamp | None = None
+        # 近两日买入金额追踪（日频买入限流）：[(date, amount), ...]
+        self._buy_log: list[tuple[pd.Timestamp, float]] = []
+        # 选股池缓存（日频模式：refresh 周期内复用，省全池选股开销）
+        self._selected_pool: list[str] | None = None
+        self._selected_pool_date: pd.Timestamp | None = None
 
     # ------------------------------------------------------------------
     def init(self, context: Context):
@@ -98,6 +113,9 @@ class CrossAssetStrategy(Strategy):
         self._stock_dates = []
         self._last_rebalance_month = None
         self._last_check_date = None
+        self._buy_log = []
+        self._selected_pool = None
+        self._selected_pool_date = None
 
     def on_bar(self, context: Context, bar: dict):
         """每根 bar 累积数据；月末触发再平衡决策。"""
@@ -191,7 +209,7 @@ class CrossAssetStrategy(Strategy):
             return self._materialize()
 
     def _maybe_rebalance(self, context: Context, date: pd.Timestamp):
-        """月末触发再平衡（全局交易日轴判月末，每日期只判一次）。"""
+        """按 rebalance_freq 触发再平衡（monthly 月末 / daily 每日；每日期只判一次）。"""
         if self._gold_close is None or self._nasdaq_close is None:
             return
         if len(self._gold_close) < self.lookback or len(self._nasdaq_close) < self.lookback:
@@ -202,6 +220,11 @@ class CrossAssetStrategy(Strategy):
             return
         self._last_check_date = date
 
+        if self.rebalance_freq == "daily":
+            self._rebalance(context, date)
+            return
+
+        # monthly：月末触发
         if not self._is_month_last_trading_day(date):
             return
 
@@ -229,7 +252,7 @@ class CrossAssetStrategy(Strategy):
 
     # ------------------------------------------------------------------
     def _rebalance(self, context: Context, date: pd.Timestamp):
-        """执行再平衡：目标权重 → 目标持仓 → 差额下单。"""
+        """执行再平衡：目标权重 → 目标持仓 → 差额下单（含近两日买入限流）。"""
         total = context.portfolio["total_asset"]
         if total <= 0:
             return
@@ -237,8 +260,12 @@ class CrossAssetStrategy(Strategy):
         # 1. 三资产目标权重（λ 并轨）
         weights = self.target_weights()
 
-        # 2. 股票端：多因子打分选股
-        target_stocks = self.select_stocks(date)
+        # 2. 股票端：多因子打分选股（日频模式：refresh 周期内复用选股池）
+        target_stocks = self._get_target_pool(date)
+
+        # 3. 近两日买入限流：剩余可买额度（0=不限）
+        buy_cap = self._remaining_buy_budget(context, date)
+
         stock_budget = total * weights["stock"]
         # 等权预算：先按目标池均分
         per_stock = stock_budget / max(len(target_stocks), 1)
@@ -250,19 +277,52 @@ class CrossAssetStrategy(Strategy):
             affordable = target_stocks  # 过滤后过少则退回原池，避免空仓
         per_stock_value = stock_budget / max(len(affordable), 1)
 
-        # 3. 黄金/纳指目标市值
-        gold_value = total * weights["gold"]
-        nasdaq_value = total * weights["nasdaq"]
-
         # 4. 生成调仓订单（差额 → 100 股整数）
-        self._adjust_position(context, self.gold_code, gold_value, date)
-        self._adjust_position(context, self.nasdaq_code, nasdaq_value, date)
-
+        #    买入额度按股票优先、ETF 次序共享同一额度池（order 保序）
+        buys: list[tuple[str, float]] = []   # (code, 目标市值)
+        self._adjust_position(context, self.gold_code, total * weights["gold"], date,
+                              budget_pool=buys, budget_cap=buy_cap)
+        self._adjust_position(context, self.nasdaq_code, total * weights["nasdaq"], date,
+                              budget_pool=buys, budget_cap=buy_cap)
         for code in affordable:
-            self._adjust_position(context, code, per_stock_value, date, band=0.005)
+            self._adjust_position(context, code, per_stock_value, date, band=0.005,
+                                  budget_pool=buys, budget_cap=buy_cap)
 
-        # 5. 清仓跌出股票池的持仓
+        # 5. 清仓跌出股票池的持仓（卖出不限流）
         self._cleanup_dropped(context, set(target_stocks), date)
+
+        # 6. 买入金额记账（限流窗口滚动）
+        spent = sum(v for _c, v in buys)
+        if spent > 0:
+            self._buy_log.append((date, spent))
+            self._buy_log = [x for x in self._buy_log if x[0] > date - pd.Timedelta(days=4)]
+
+    def _get_target_pool(self, date: pd.Timestamp) -> list[str]:
+        """选股池（日频模式 refresh 周期内复用；月频每次重选）。"""
+        if self.rebalance_freq != "daily":
+            return self.select_stocks(date)
+        if (self._selected_pool is not None
+                and self._selected_pool_date is not None
+                and (date - self._selected_pool_date).days < self.select_refresh_days):
+            return self._selected_pool
+        pool = self.select_stocks(date)
+        self._selected_pool = pool
+        self._selected_pool_date = date
+        return pool
+
+    def _remaining_buy_budget(self, context: Context, date: pd.Timestamp) -> float:
+        """近两日买入限流：剩余可买额度（0=不限）。
+
+        max_buy_2d_pct=0.25 → 任意连续两日累计买入 ≤ 总资产×25%。
+        已买金额 = _buy_log 中近两日（自然日）记录之和。
+        """
+        if self.max_buy_2d_pct <= 0:
+            return 0.0  # 不限
+        total = context.portfolio["total_asset"]
+        cap = total * self.max_buy_2d_pct
+        recent = sum(v for d, v in self._buy_log
+                     if (date - d).days <= 2)
+        return max(cap - recent, 0.0)
 
     def target_weights(self) -> dict:
         """λ 并轨：最终权重 = 固定 × (1−λ) + 动态择时 × λ。"""
@@ -492,11 +552,16 @@ class CrossAssetStrategy(Strategy):
 
     # ------------------------------------------------------------------
     def _adjust_position(self, context: Context, code: str, target_value: float, date,
-                        band: float = 0.02):
+                        band: float = 0.02, budget_pool: list | None = None,
+                        budget_cap: float = 0.0):
         """调仓到目标市值（差额 → 100 股整数），带再平衡阈值。
 
         band: 最小调仓阈值（占单只持仓目标/当前市值比例，控制换手）。
         ETF 端 2%；股票端调用方传 0.005。
+
+        budget_pool/budget_cap: 近两日买入限流。budget_cap>0 时，本单买入
+        金额记入 budget_pool，累计超限部分缩减（超限则截断到手数最小单位，
+        为 0 则跳过）。卖出不受限。
         """
         price = self._latest_price(code)
         if price is None or price <= 0:
@@ -517,7 +582,19 @@ class CrossAssetStrategy(Strategy):
         if lots <= 0:
             return
         if diff > 0:
-            context.buy(code, price, lots)
+            # 买入限流：剩余额度不足时缩减手数（不足 1 手则跳过）
+            if budget_pool is not None and budget_cap > 0:
+                already = sum(v for _c, v in budget_pool)
+                avail = budget_cap - already
+                buy_value = lots * price
+                if buy_value > avail:
+                    lots = int(avail / price / lot) * lot
+                    if lots <= 0:
+                        return  # 额度耗尽，本单跳过（次日额度恢复继续买）
+                if lots > 0:
+                    budget_pool.append((code, lots * price))
+            if lots > 0:
+                context.buy(code, price, lots)
         else:
             vol = min(lots, pos["volume"] if pos else 0)
             if vol > 0:

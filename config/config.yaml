@@ -25,11 +25,14 @@ strategy:                   # 跨资产对冲配置
   allow_star: false         # 科创板 688（账户未开通科创板权限时改 false，防废单）
   main_board_only: true     # 仅主板（沪 60x / 深 00x，剔创业板/科创板/北交所）
   exclude_st: true          # 剔除 ST/*ST/退市整理股
+  rebalance_freq: daily     # 调仓频率：monthly（月末）/ daily（每日）
+  select_refresh_days: 5    # 日频模式选股池刷新周期（天；1=每天重选，因子变化缓，建议 5）
 
 risk:                       # 风控阈值
   max_position_pct: 0.20    # 单标的持仓上限
   max_drawdown: 0.20        # 组合最大回撤硬约束
   max_single_weight: 0.02   # 单只个股权重上限
+  max_buy_2d_pct: 0.25      # 近两日累计买入金额 ≤ 总资产×此比例（0=不限；建仓平滑/防无止境买入）
 
 supermind:
   account_env: SUPERMIND_ACCOUNT  # 模拟资金账号的环境变量名

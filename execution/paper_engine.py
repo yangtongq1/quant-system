@@ -253,6 +253,9 @@ def run_paper_signals(
         main_board_only=bool(strat_cfg.get("main_board_only", False)),
         exclude_st=bool(strat_cfg.get("exclude_st", True)),
         stock_meta=load_stock_meta(),
+        rebalance_freq=str(strat_cfg.get("rebalance_freq", "monthly")),
+        select_refresh_days=int(strat_cfg.get("select_refresh_days", 5)),
+        max_buy_2d_pct=float(cfg.get("risk", {}).get("max_buy_2d_pct", 0) or 0),
     )
 
     paper_core = getattr(broker, "paper", None)

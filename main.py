@@ -187,6 +187,9 @@ def _make_strategy(args):
             main_board_only=bool(strat_cfg.get("main_board_only", False)),
             exclude_st=bool(strat_cfg.get("exclude_st", True)),
             stock_meta=stock_meta,
+            rebalance_freq=str(strat_cfg.get("rebalance_freq", "monthly")),
+            select_refresh_days=int(strat_cfg.get("select_refresh_days", 5)),
+            max_buy_2d_pct=float(CONFIG.get("risk", {}).get("max_buy_2d_pct", 0) or 0),
         )
     print(f"[backtest] 未知策略: {args.strategy}（可选 dual_ma / cross_asset）")
     return None
