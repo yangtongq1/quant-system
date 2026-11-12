@@ -385,14 +385,54 @@ class CrossAssetStrategy(Strategy):
         return w
 
     def _stock_index_series(self) -> pd.Series | None:
-        """股票端指数代理：等权股票池价格指数（仅用于择时波动率/动量）。"""
+        """股票端指数代理：等权股票池价格指数（仅用于择时波动率/动量）。
+
+        性能关键：日频模式下每天被 dynamic_weights 调用，全池物化一次数秒
+        不可承受 → 增量缓存。按「该日期各股票最新收盘价的等权均值」逐日
+        累积（与全量 ffill+mean 的择时语义等价：均用于 60 日波动率/动量，
+        价格水平细节差异不影响择时结果）。每个日期只计算一次。
+        """
         if not self._stock_close:
             return None
-        df = pd.DataFrame({code: acc.to_series() for code, acc in self._stock_close.items()})
-        df = df.ffill().dropna(how="all")
-        if df.empty:
+        if getattr(self, "_idx_cache", None) is None:
+            self._idx_dates: list = []
+            self._idx_values: list = []
+            self._idx_cache = True
+        dates, values = self._idx_dates, self._idx_values
+        # 日期轴：优先全局交易日轴（on_bar 维护）；测试/外部注入场景下
+        # _stock_dates 可能未填 → 从各股票序列的日期并集推导（升序去重）
+        axis = self._stock_dates
+        if not axis:
+            seen = set()
+            axis = []
+            for acc in self._stock_close.values():
+                for d in acc.dates:
+                    if d not in seen:
+                        seen.add(d)
+                        axis.append(d)
+            axis.sort()
+        import bisect as _bisect
+        for d in axis:
+            if dates and d <= dates[-1]:
+                continue
+            vals = []
+            for acc in self._stock_close.values():
+                if not acc.dates:
+                    continue
+                # 快路径：实时重放场景 acc 尾值即 as-of 值（数据不超前当前日）
+                if acc.dates[-1] <= d:
+                    vals.append(acc.values[-1])
+                    continue
+                # 预载/批量场景：bisect 查 ≤ d 的 as-of 值（防未来数据）
+                i = _bisect.bisect_right(acc.dates, d)
+                if i > 0:
+                    vals.append(acc.values[i - 1])
+            if vals:
+                dates.append(d)
+                values.append(sum(vals) / len(vals))
+        if not dates:
             return None
-        return df.mean(axis=1)
+        return pd.Series(values, index=pd.DatetimeIndex(dates))
 
     # ------------------------------------------------------------------
     def _prepare_fundamentals(self):

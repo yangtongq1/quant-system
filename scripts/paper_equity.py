@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-PAPER_START = "2026-11-11"          # 模拟盘正式起始日（此前调试单不计入）
+PAPER_START = "2026-11-12"          # 100万仓位重建日（此前为 310万混合调试仓位，不计入）
 CSV_PATH = ROOT / "data" / "paper_equity.csv"
 FIELDS = ["date", "total_asset", "cash", "market_value", "strategy_mv", "source"]
 

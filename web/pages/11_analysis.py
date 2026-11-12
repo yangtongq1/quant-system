@@ -52,13 +52,16 @@ def load_equity() -> pd.Series:
 
 @st.cache_data(ttl=120, show_spinner="加载实盘净值…")
 def load_paper_equity() -> pd.Series:
-    """模拟盘实盘净值（QMT 柜台总资产，自 2026-11-11 正式起始日起）。"""
+    """模拟盘实盘净值：策略市值口径（100 万重建仓位），自 2026-11-12 重建日起。"""
     p = ROOT / "data" / "paper_equity.csv"
     if not p.exists():
         return pd.Series(dtype=float)
     try:
-        df = pd.read_csv(p, parse_dates=["date"]).set_index("date")["total_asset"]
-        return df[df > 0].astype(float)
+        df = pd.read_csv(p, parse_dates=["date"]).set_index("date")
+        # 口径：优先策略市值（100 万仓位净值变化），缺失退化到总资产
+        col = "strategy_mv" if "strategy_mv" in df.columns else "total_asset"
+        s = df[col]
+        return s[s > 0].astype(float)
     except Exception:  # noqa: BLE001
         return pd.Series(dtype=float)
 
@@ -175,7 +178,7 @@ if eq.empty:
     st.stop()
 
 if view == "paper" and len(eq) < 10:
-    st.info(f"{t('实盘拟合')}：{t('模拟盘正式运行自')} 2026-11-11"
+    st.info(f"{t('实盘拟合')}：{t('模拟盘正式运行自')} 2026-11-12（100 万仓位重建，策略市值口径）"
             f"（{len(eq)} {t('个交易日')}）——{t('数据积累中，指标需 ≥10 天后稳定')}")
 
 bench = load_benchmark(bench_sym)

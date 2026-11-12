@@ -79,7 +79,7 @@ def load_names() -> tuple[dict, dict]:
 
 # ── 模拟盘正式起始日 ──
 # 之前的委托均为调试/试错单（ETF 建仓 + 链路验证），交割单与统计从该日起计算。
-PAPER_START = pd.Timestamp("2026-11-11")
+PAPER_START = pd.Timestamp("2026-11-12")
 
 
 @st.cache_data(ttl=30)
