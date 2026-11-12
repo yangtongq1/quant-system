@@ -14,14 +14,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from web.theme import ACCENT, DOWN, TEXT_DIM, UP, inject_css
+from web.i18n import lang_selector, t
 
 st.set_page_config(page_title="系统控制台 · QUANT TERMINAL", layout="wide")
+lang_selector()
 st.markdown(inject_css(), unsafe_allow_html=True)
 
 st.markdown(f"""
-<div class="page-title">◈ SYSTEM CONSOLE</div>
+<div class="page-title">◈ {t("系统控制台")} / SYSTEM CONSOLE</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">
-    系统操作台 · 数据采集 / 回测 / 因子 / 风控 / 执行 · 后台运行 + 实时日志</div>
+    {t("系统操作台 · 数据采集 / 回测 / 因子 / 风控 / 执行 · 后台运行 + 实时日志")}</div>
 """, unsafe_allow_html=True)
 
 

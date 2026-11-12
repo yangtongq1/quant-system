@@ -10,15 +10,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from web.theme import ACCENT, TEXT_DIM, inject_css
+from web.i18n import lang_selector, t
 
 st.set_page_config(page_title="因子质检 · QUANT TERMINAL", layout="wide")
+lang_selector()
 st.markdown(inject_css(), unsafe_allow_html=True)
 
 from factors.engine import list_factors
 from web.charts import factor_corr_heatmap, factor_ic_bar
 
 st.markdown(f"""
-<div class="page-title">◈ FACTOR QA</div>
+<div class="page-title">◈ {t("因子质检")} / FACTOR QA</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">
     IC / ICIR / 覆盖率 / 分年稳定性 / 去相关 · 已注册 {len(list_factors())} 因子
 </div>

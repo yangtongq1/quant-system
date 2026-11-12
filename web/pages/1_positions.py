@@ -64,11 +64,11 @@ def last_price(code: str) -> float | None:
 
 
 st.markdown(f"""
-<div class="page-title">◈ POSITIONS & ORDERS</div>
-<div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">持仓 · 订单 · 成交流水 · A股 + ETF</div>
+<div class="page-title">◈ {t("持仓与订单")} / POSITIONS & ORDERS</div>
+<div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">{t("持仓 · 订单 · 成交流水 · A股 + ETF")}</div>
 """, unsafe_allow_html=True)
 
-tabs = st.tabs(["◎ 持仓", "◎ 订单", "◎ 成交流水"])
+tabs = st.tabs([f"◎ {t('持仓')}", f"◎ {t('订单')}", f"◎ {t('成交流水')}"])
 
 # ── Tab 1: 持仓（增强版） ──
 with tabs[0]:

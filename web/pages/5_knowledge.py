@@ -10,8 +10,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from web.theme import ACCENT, ACCENT_2, TEXT_DIM, inject_css
+from web.i18n import lang_selector, t
 
 st.set_page_config(page_title="金融知识库 · QUANT TERMINAL", layout="wide")
+lang_selector()
 st.markdown(inject_css(), unsafe_allow_html=True)
 
 from knowledge.storage import KnowledgeStorage
@@ -19,7 +21,7 @@ from knowledge.storage import KnowledgeStorage
 kb = KnowledgeStorage(ROOT / "knowledge" / "knowledge.db")
 
 st.markdown(f"""
-<div class="page-title">◈ KNOWLEDGE BASE</div>
+<div class="page-title">◈ {t("知识库")} / KNOWLEDGE BASE</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">资讯采集 · 全文检索 · 中英双语</div>
 """, unsafe_allow_html=True)
 
