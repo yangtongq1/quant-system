@@ -114,27 +114,43 @@ class QmtBroker(BrokerAdapter):
             raise RuntimeError(msg)
 
     def _connect(self, session_id: int | None = None):
-        """连接 miniQMT（客户端须已启动并登录）。"""
+        """连接 miniQMT（客户端须已启动并登录）。
+
+        含重试（session_id 撞号/瞬时握手失败时换 sid 重连，最多 3 次）。
+        """
+        import time as _time
+
         from xtquant.xttrader import XtQuantTrader
         from xtquant.xttype import StockAccount
-        # session_id：同一进程内唯一即可；不传用时间戳派生
-        sid = session_id or int(datetime.now().strftime("%H%M%S"))
-        self.trader = XtQuantTrader(self.qmt_path, sid)
-        # 新版 xtquant（250807+）：start() 无返回值、connect() 无参、
-        # 账号用 StockAccount 对象传入 subscribe()；旧版 connect(account_id)。
-        started = self.trader.start()
-        if started not in (None, 0):
-            raise RuntimeError(f"XtQuantTrader.start() 失败：{started}（miniQMT 未启动？）")
-        import inspect
-        n_params = len(inspect.signature(self.trader.connect).parameters)  # 含 self
-        if n_params >= 2:
-            # 旧版 API：connect(account_id)
-            ok = self.trader.connect(self.account)
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                # session_id：同一进程内唯一即可；pid+时间戳派生，防撞号
+                sid = session_id or (os.getpid() % 100000 * 1000
+                                     + int(_time.time()) % 1000)
+                self.trader = XtQuantTrader(self.qmt_path, sid)
+                # 新版 xtquant（250807+）：start() 无返回值、connect() 无参、
+                # 账号用 StockAccount 对象传入 subscribe()；旧版 connect(account_id)。
+                started = self.trader.start()
+                if started not in (None, 0):
+                    raise RuntimeError(f"XtQuantTrader.start() 失败：{started}（miniQMT 未启动？）")
+                import inspect
+                n_params = len(inspect.signature(self.trader.connect).parameters)  # 含 self
+                if n_params >= 2:
+                    # 旧版 API：connect(account_id)
+                    ok = self.trader.connect(self.account)
+                else:
+                    # 新版 API：connect() + subscribe(StockAccount)
+                    ok = self.trader.connect()
+                if ok not in (None, 0):
+                    raise RuntimeError(f"connect() 失败：{ok}（miniQMT 未启动？）")
+                break  # 连接成功
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                session_id = None  # 重试换新 sid
+                _time.sleep(1.5)
         else:
-            # 新版 API：connect() + subscribe(StockAccount)
-            ok = self.trader.connect()
-        if ok not in (None, 0):
-            raise RuntimeError(f"connect() 失败：{ok}（miniQMT 未启动？）")
+            raise last_err if last_err else RuntimeError("connect() 未知失败")
         self._account_obj = None
         # 订阅账号：东莞等券商柜台内部账号不带前导零（002038046455 → 2038046455）。
         # 两种形式都试，谁成功用谁。

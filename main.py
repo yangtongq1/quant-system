@@ -548,6 +548,15 @@ def cmd_run_paper(args):
     reset_positions = getattr(args, "reset_positions", False)
     external = None  # 外部通道 broker（QMT/掘金/SuperMind）：订单需真实委托
     broker = None
+    # QMT 通道：run 前先结算同步（防柜台批次撮合中间态污染台账/重复委托）
+    if use_qmt:
+        try:
+            from scripts.sync_settle import sync as _sync_settle
+            print("[run-paper] 前置结算同步（柜台终态对齐，防撮合中间态）...")
+            _ = _sync_settle(verbose=False)
+            print("[run-paper] 结算同步完成")
+        except Exception as e:  # noqa: BLE001
+            print(f"[run-paper] 结算同步跳过（{type(e).__name__}: {e}）")
     if use_gmtrade:
         # gmtrade 仅支持 Python 3.6–3.10；主力 3.13 环境自动切换 py310 重启自身
         try:
@@ -676,6 +685,12 @@ def cmd_run_paper(args):
         print(f"[run-paper] 实盘净值留痕：{msg}")
     except Exception as e:  # noqa: BLE001
         print(f"[run-paper] 实盘净值留痕失败（不影响执行）：{type(e).__name__}: {e}")
+
+
+def cmd_sync_settle(args):
+    """结算同步：东莞柜台批次撮合后对账（台账对齐+订单回写+净值重留痕）。"""
+    from scripts.sync_settle import sync
+    sync()
 
 
 def cmd_monitor(args):
@@ -812,6 +827,10 @@ def main():
 
     p = sub.add_parser("qmt-status", help="QMT/miniQMT 连接诊断（xtquant/账号/客户端状态）")
     p.set_defaults(func=cmd_qmt_status)
+
+    p = sub.add_parser("sync-settle",
+                       help="结算同步：柜台终态对齐台账+订单状态回写+净值重留痕（东莞柜台批次撮合后必跑）")
+    p.set_defaults(func=cmd_sync_settle)
 
     p = sub.add_parser("monitor")
     p.set_defaults(func=cmd_monitor)
