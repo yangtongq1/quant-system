@@ -85,6 +85,48 @@ def load_strategy_order_codes() -> set[str]:
         return set()
 
 
+def _fallback_price(code: str) -> float:
+    """无本地行情（bars 缺失）标的的兜底价：QMT 实时行情 → 台账成本价。
+
+    场景：管理范围内持仓被数据层过滤（ST/退市股无 parquet）→
+    latest_close 缺失 → 差额段 price=0 静默跳过 → 清仓卖单永远生成不了。
+    """
+    # 1) QMT 实时行情（有 xtquant 时）
+    try:
+        from xtquant import xtdata
+
+        if code.startswith(("6", "9", "5")):
+            sym = f"{code}.SH"
+        elif code.startswith(("0", "3", "1")):
+            sym = f"{code}.SZ"
+        else:
+            sym = f"{code}.BJ"
+        tick = xtdata.get_full_tick([sym]) or {}
+        d = tick.get(sym) or {}
+        if d:
+            ask1 = (d.get("askPrice") or [0])[0]
+            bid1 = (d.get("bidPrice") or [0])[0]
+            last = d.get("lastPrice") or 0
+            px = float(ask1 or bid1 or last or 0)
+            if px > 0:
+                return px
+    except Exception:  # noqa: BLE001
+        pass
+    # 2) DB 台账成本价（最后兜底：QMT 不在线/无行情）
+    try:
+        db = ROOT / "data" / "quant.db"
+        if db.exists():
+            with sqlite3.connect(str(db)) as conn:
+                row = conn.execute(
+                    "SELECT avg_cost FROM positions WHERE code=?", (code,)
+                ).fetchone()
+            if row and row[0] and float(row[0]) > 0:
+                return float(row[0])
+    except Exception:  # noqa: BLE001
+        pass
+    return 0.0
+
+
 def reset_current_positions() -> None:
     """清空数据库现持仓（首跑建仓用：差额 = 目标持仓全量买入）。"""
     db = ROOT / "data" / "quant.db"
@@ -243,6 +285,17 @@ def run_paper_signals(
         code: float(df["close"].iloc[-1])
         for code, df in bars.items()
     }
+    # 补价：管理范围内持仓但无 bars 数据的标的（如 ST/退市股被数据层
+    # 过滤，parquet 缺失）——不补价则 price=0 被静默跳过，清仓卖单
+    # 永远无法生成，持仓烂在柜台（红线 bug）。兜底链：
+    # QMT 实时行情 → DB 台账成本价 → 0（无价不发单，防误操作）
+    if current_positions:
+        missing = [c for c in current_positions if c not in latest_close]
+        for c in missing:
+            px = _fallback_price(c)
+            if px > 0:
+                latest_close[c] = px
+                log.info(f"补价：{c} 无本地行情，兜底价 {px:.3f}（清仓卖单仍可生成）")
     if current_positions is not None:
         # 外部通道模式：柜台实际持仓 = 事实源，但仅取「策略管理范围」内标的。
         # 管理范围 = 目标持仓 ∪ 策略历史订单代码（orders 表）∪ DB 台账代码。
