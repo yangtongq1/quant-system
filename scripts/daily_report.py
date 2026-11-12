@@ -100,6 +100,8 @@ def generate(day: str | None = None) -> Path:
         "",
         f"> 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
+        "> **模拟盘正式运行自 2026-11-11**（此前委托均为链路调试单，不计入交割统计）",
+        "",
         "## 一、当日委托执行（外部通道）",
         "",
         f"- 委托笔数：**{len(orders)}**（买入 {n_buy} / 卖出 {n_sell}）",

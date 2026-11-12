@@ -50,6 +50,19 @@ def load_equity() -> pd.Series:
     return df[df > 0].astype(float)
 
 
+@st.cache_data(ttl=120, show_spinner="加载实盘净值…")
+def load_paper_equity() -> pd.Series:
+    """模拟盘实盘净值（QMT 柜台总资产，自 2026-11-11 正式起始日起）。"""
+    p = ROOT / "data" / "paper_equity.csv"
+    if not p.exists():
+        return pd.Series(dtype=float)
+    try:
+        df = pd.read_csv(p, parse_dates=["date"]).set_index("date")["total_asset"]
+        return df[df > 0].astype(float)
+    except Exception:  # noqa: BLE001
+        return pd.Series(dtype=float)
+
+
 @st.cache_data(ttl=3600, show_spinner="拉取基准…")
 def load_benchmark(sym: str) -> pd.Series:
     """基准指数日线（新浪源）。先读本地缓存，缺失或过期时在线拉取。"""
@@ -80,10 +93,13 @@ def load_benchmark(sym: str) -> pd.Series:
 
 def perf_metrics(eq: pd.Series, bench: pd.Series | None = None,
                  rf: float = 0.015) -> dict:
-    """核心绩效指标：收益/回撤/夏普/索提诺/卡玛/VaR/CVaR/(+基准时 Alpha/Beta/IR)。"""
+    """核心绩效指标：收益/回撤/夏普/索提诺/卡玛/VaR/CVaR/(+基准时 Alpha/Beta/IR)。
+
+    小样本（实盘初期 < 30 天）时方差类指标标记 unstable=True。
+    """
     ret = eq.pct_change().dropna()
     n = len(eq)
-    out: dict = {"n_days": n}
+    out: dict = {"n_days": n, "unstable": n < 30}
     if n < 2 or ret.empty:
         return out
     total = eq.iloc[-1] / eq.iloc[0] - 1
@@ -114,13 +130,13 @@ def perf_metrics(eq: pd.Series, bench: pd.Series | None = None,
     if bench is not None and len(bench):
         dfb = pd.DataFrame({"eq": eq}).join(
             pd.DataFrame({"b": bench}), how="inner").dropna()
-        if len(dfb) > 30:
+        if len(dfb) >= 3:
             r = dfb["eq"].pct_change().dropna()
             rb = dfb["b"].pct_change().dropna()
             # 对齐两个序列
             idx = r.index.intersection(rb.index)
             r, rb = r[idx], rb[idx]
-            if len(r) > 30:
+            if len(r) >= 3:
                 cov = np.cov(r, rb, ddof=1)
                 beta = cov[0, 1] / cov[1, 1] if cov[1, 1] != 0 else np.nan
                 alpha = (1 + r.mean() * 252) / (1 + rb.mean() * 252) - 1  # 年化超额
@@ -135,20 +151,39 @@ def perf_metrics(eq: pd.Series, bench: pd.Series | None = None,
 
 # ── 页面主体 ─────────────────────────────────────────────
 
-eq = load_equity()
-if eq.empty:
-    st.warning("暂无净值数据（report/equity.csv 缺失）。运行 python main.py run-paper 生成。")
-    st.stop()
+paper_eq = load_paper_equity()
+has_paper = len(paper_eq) >= 2
 
-col_pick, col_b = st.columns([3, 1])
+col_pick, col_b = st.columns([2, 2])
 with col_b:
     bench_sym = st.selectbox(t("基准"), list(BENCH), index=0, format_func=lambda s: BENCH[s])
+with col_pick:
+    if has_paper:
+        view_labels = {t("回测重放"): "backtest", t("实盘拟合"): "paper"}
+        view = st.radio(t("净值视图"), list(view_labels), index=1,
+                        format_func=lambda x: x, label_visibility="visible",
+                        horizontal=True)
+        view = view_labels[view]
+    else:
+        view = "backtest"
+
+eq = load_equity()
+if view == "paper":
+    eq = paper_eq
+if eq.empty:
+    st.warning("暂无净值数据。运行 python main.py run-paper 生成。")
+    st.stop()
+
+if view == "paper" and len(eq) < 10:
+    st.info(f"{t('实盘拟合')}：{t('模拟盘正式运行自')} 2026-11-11"
+            f"（{len(eq)} {t('个交易日')}）——{t('数据积累中，指标需 ≥10 天后稳定')}")
 
 bench = load_benchmark(bench_sym)
 m = perf_metrics(eq, bench if bench is not None and len(bench) else None)
 
 # ── KPI 总览 ──
 has_bench = "bench_total" in m
+unstable_tag = f" · ⚠ {t('样本不足30天')}" if m.get("unstable") else ""
 st.markdown(f'<div class="panel-title">{t("收益与风险总览")} / OVERVIEW</div>',
             unsafe_allow_html=True)
 st.markdown(kpi_grid([
@@ -156,7 +191,7 @@ st.markdown(kpi_grid([
              f"{m.get('n_days', 0)} {t('个交易日')}",
              cls="kpi-up" if m.get("total", 0) >= 0 else "kpi-down"),
     kpi_card(t("年化收益"), f"{m.get('ann_ret', 0):.2%}",
-             f"RF 1.5%", cls="kpi-up" if m.get("ann_ret", 0) >= 0 else "kpi-down"),
+             f"RF 1.5%{unstable_tag}", cls="kpi-up" if m.get("ann_ret", 0) >= 0 else "kpi-down"),
     kpi_card(t("最大回撤"), f"{m.get('max_dd', 0):.2%}", t("水下曲线峰值"),
              cls="kpi-down" if m.get("max_dd", 0) < 0 else None),
     kpi_card(t("夏普比率"), f"{m.get('sharpe', float('nan')):.3f}", "Ann / RF 1.5%"),

@@ -179,6 +179,22 @@ _EN: dict[str, str] = {
     "持仓 · 订单 · 成交流水 · A股 + ETF": "Positions · Orders · Trades · A-Share + ETF",
     "持仓": "Positions",
     "知识库": "Knowledge Base",
+    "自起始日全部": "All Since Start",
+    "近30天": "Last 30d",
+    "近7天": "Last 7d",
+    "今日": "Today",
+    "委托笔数": "# Orders",
+    "正式运行": "Live Days",
+    "天": "days",
+    "起": "onward",
+    "模拟盘正式运行自": "Paper trading since",
+    "此前调试单不计入": "debug orders excluded",
+    "秒自动刷新": "s auto-refresh",
+    "回测重放": "Backtest Replay",
+    "实盘拟合": "Paper Live",
+    "净值视图": "NAV View",
+    "数据积累中，指标需 ≥10 天后稳定": "accumulating data; metrics stable after ≥10 days",
+    "样本不足30天": "<30d sample",
 }
 
 

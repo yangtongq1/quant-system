@@ -669,6 +669,14 @@ def cmd_run_paper(args):
         print("[run-paper] 风控校验通过（无拒绝/拦截事件）")
     print("[run-paper] 订单/持仓已入库 data/quant.db")
 
+    # 实盘净值留痕（QMT 柜台总资产 → data/paper_equity.csv，幂等）
+    try:
+        from scripts.paper_equity import record as record_paper_equity
+        msg = record_paper_equity()
+        print(f"[run-paper] 实盘净值留痕：{msg}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[run-paper] 实盘净值留痕失败（不影响执行）：{type(e).__name__}: {e}")
+
 
 def cmd_monitor(args):
     """相关性监控（分散失效检测）。"""

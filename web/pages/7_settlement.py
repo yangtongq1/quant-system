@@ -77,9 +77,17 @@ def load_names() -> tuple[dict, dict]:
                 return {}, {}
 
 
+# ── 模拟盘正式起始日 ──
+# 之前的委托均为调试/试错单（ETF 建仓 + 链路验证），交割单与统计从该日起计算。
+PAPER_START = pd.Timestamp("2026-11-11")
+
+
 @st.cache_data(ttl=30)
-def load_settlement(days: int = 30) -> pd.DataFrame:
-    """交割单（外部通道真实委托成交 + 本地 FILLED 单，近 N 天）。"""
+def load_settlement(scope: str = "all") -> pd.DataFrame:
+    """交割单（外部通道真实委托成交，自模拟盘正式起始日起）。
+
+    scope: all=自起始日全部 / 30d=近30天 / 7d=近7天 / today=今日
+    """
     db = ROOT / "data" / "quant.db"
     with sqlite3.connect(str(db)) as conn:
         try:
@@ -90,8 +98,17 @@ def load_settlement(days: int = 30) -> pd.DataFrame:
     if df.empty:
         return df
     df["create_time"] = pd.to_datetime(df["create_time"], errors="coerce")
-    cutoff = pd.Timestamp.now() - pd.Timedelta(days=days)
-    return df[df["create_time"] >= cutoff].copy()
+    # 正式起始日锚点：之前的调试单不计入
+    df = df[df["create_time"] >= PAPER_START].copy()
+    if scope == "30d":
+        cutoff = pd.Timestamp.now() - pd.Timedelta(days=30)
+        return df[df["create_time"] >= cutoff].copy()
+    if scope == "7d":
+        cutoff = pd.Timestamp.now() - pd.Timedelta(days=7)
+        return df[df["create_time"] >= cutoff].copy()
+    if scope == "today":
+        return df[df["create_time"].dt.date == pd.Timestamp.now().date()].copy()
+    return df
 
 
 st.markdown(f"""
@@ -102,10 +119,13 @@ st.markdown(f"""
 
 col1, col2 = st.columns([3, 1])
 with col2:
-    days = st.selectbox(t("日期范围 / Days"), [7, 30, 90, 365], index=1,
-                        label_visibility="collapsed")
+    scope_labels = {t("自起始日全部"): "all", t("近30天"): "30d",
+                    t("近7天"): "7d", t("今日"): "today"}
+    scope_pick = st.selectbox(t("日期范围 / Days"), list(scope_labels),
+                              index=0, label_visibility="collapsed")
+    scope = scope_labels[scope_pick]
 
-df = load_settlement(days)
+df = load_settlement(scope)
 if df.empty:
     st.info(t("暂无数据") + "。运行 python main.py run-paper --qmt 产生真实委托。")
     st.stop()
@@ -147,16 +167,20 @@ buys = sdf[sdf[t("方向")] == t("买入")]
 sells = sdf[sdf[t("方向")] == t("卖出")]
 buy_amt = sum(float(x.replace(",", "")) for x in buys[t("金额")])
 sell_amt = sum(float(x.replace(",", "")) for x in sells[t("金额")])
+n_days_run = (pd.Timestamp.now() - PAPER_START).days + 1
 st.markdown(kpi_grid([
-    kpi_card(t("成交笔数"), f"{len(sdf)}", f"{t('日期范围')} {days}d"),
+    kpi_card(t("委托笔数"), f"{len(sdf)}", f"{scope_pick}"),
     kpi_card(t("买入金额"), f"{buy_amt:,.0f}", f"{len(buys)} {t('笔')}",
              cls="kpi-up"),
     kpi_card(t("卖出金额"), f"{sell_amt:,.0f}", f"{len(sells)} {t('笔')}",
              cls="kpi-down"),
     kpi_card(t("净买入"), f"{buy_amt - sell_amt:+,.0f}", t("买入-卖出")),
+    kpi_card(t("正式运行"), f"{n_days_run} {t('天')}",
+             f"{PAPER_START:%Y-%m-%d} {t('起')}", cls="kpi-up"),
 ]), unsafe_allow_html=True)
 
 st.markdown(f'<div class="panel-title">{t("交割单")} / SETTLEMENT DETAIL</div>',
             unsafe_allow_html=True)
 st.dataframe(sdf, use_container_width=True, hide_index=True, on_select="ignore")
-st.caption(f"{len(sdf)} 条 · 近 {days} 天真实委托 · 行业分类来自新浪（1 小时缓存）· 30 秒自动刷新")
+st.caption(f"{len(sdf)} 条 · {t('模拟盘正式运行自')} {PAPER_START:%Y-%m-%d}"
+           f"（{t('此前调试单不计入')}）· 30 {t('秒自动刷新')}")

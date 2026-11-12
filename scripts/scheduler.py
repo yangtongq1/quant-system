@@ -188,12 +188,30 @@ def run_daily_job(top_n: int = 50, lam: float = 0.5):
         ("行情增量", lambda: step_fetch_recent()),
         ("财报增量", step_fetch_fundamentals),
         ("信号+模拟盘", lambda: step_run_signals(top_n=top_n, lam=lam)),
+        ("实盘净值留痕", lambda: _step_paper_equity()),
+        ("交易日报", lambda: _step_daily_report()),
     ):
         try:
             fn()
         except Exception as e:  # noqa: BLE001
             log.error(f"[daily] 环节「{name}」异常: {type(e).__name__} {str(e)[:120]}")
     log.info(f"========== 每日任务完成（{time.time() - t0:.0f}s）==========")
+
+
+def _step_paper_equity() -> bool:
+    """实盘净值留痕（QMT 柜台总资产 → data/paper_equity.csv，幂等）。"""
+    from scripts.paper_equity import record
+    msg = record()
+    log.info(f"[step5] {msg}")
+    return True
+
+
+def _step_daily_report() -> bool:
+    """交易日报（report/daily/YYYY-MM-DD.md）。"""
+    from scripts.daily_report import generate
+    out = generate()
+    log.info(f"[step6] 日报已生成 {out.name}")
+    return True
 
 
 def main():
