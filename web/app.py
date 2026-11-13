@@ -29,7 +29,6 @@ _PAGES: list[tuple[str, str]] = [
     ("1_positions", "持仓与订单"),
     ("2_backtest", "回测报告"),
     ("3_factors", "因子质检"),
-    ("4_risk", "风控中心"),
     ("5_knowledge", "知识库"),
     ("6_runs", "运行中心"),
     ("7_settlement", "交割单"),
@@ -42,7 +41,7 @@ _PAGES: list[tuple[str, str]] = [
 
 _icons = {
     "0_console": "🛠", "1_positions": "◎", "2_backtest": "📋", "3_factors": "🧪",
-    "4_risk": "🛡", "5_knowledge": "📚", "6_runs": "⚙", "7_settlement": "🧾",
+    "5_knowledge": "📚", "6_runs": "⚙", "7_settlement": "🧾",
     "8_daily": "📰", "9_oneclick": "⚡", "10_market": "📈", "11_analysis": "📊",
     "12_stock_view": "🕯",
 }

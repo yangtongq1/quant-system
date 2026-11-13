@@ -551,8 +551,14 @@ def cmd_run_paper(args):
     reset_positions = getattr(args, "reset_positions", False)
     external = None  # 外部通道 broker（QMT/掘金/SuperMind）：订单需真实委托
     broker = None
-    # QMT 通道：run 前先结算同步（防柜台批次撮合中间态污染台账/重复委托）
+    # QMT 通道：run 前先撤旧单（昨日/同日在挂委托防重复），再结算同步（防撮合中间态）
     if use_qmt:
+        try:
+            from scripts.cancel_stale import cancel_stale
+            print("[run-paper] 前置撤旧单（在挂委托防重复）...")
+            _ = cancel_stale(verbose=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[run-paper] 撤旧单跳过（{type(e).__name__}: {e}）")
         try:
             from scripts.sync_settle import sync as _sync_settle
             print("[run-paper] 前置结算同步（柜台终态对齐，防撮合中间态）...")
@@ -834,6 +840,15 @@ def main():
     p = sub.add_parser("sync-settle",
                        help="结算同步：柜台终态对齐台账+订单状态回写+净值重留痕（东莞柜台批次撮合后必跑）")
     p.set_defaults(func=cmd_sync_settle)
+
+    p = sub.add_parser("cancel-stale",
+                       help="撤旧单：撤掉本策略在柜台的未终结委托（run-paper 前置自动执行，防重复委托）")
+
+    def _cmd_cancel_stale(_args):
+        from scripts.cancel_stale import cancel_stale
+        cancel_stale()
+
+    p.set_defaults(func=_cmd_cancel_stale)
 
     p = sub.add_parser("monitor")
     p.set_defaults(func=cmd_monitor)

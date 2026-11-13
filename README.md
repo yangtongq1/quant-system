@@ -70,8 +70,14 @@ python scripts/dashboard_watchdog.py --status    # 查看运行状态
 ### 每日自动链路（调度器 15:30 触发，全程幂等）
 
 ```
-行情增量采集 → 财报增量 → 策略信号生成 → 模拟盘委托(QMT) → 净值留痕 → 交易日报
+行情增量采集 → 财报增量 → run-paper --qmt（撤旧单 → 结算同步 → 策略重放 → 目标持仓
+→ 差额调仓单 → 风控 → 限价委托 QMT）→ 净值留痕 → 交易日报
 ```
+
+- **防重复委托**：当日已有成功下单记录则跳过下单环节；run 前自动撤掉我们的在挂委托
+  （`python main.py cancel-stale` 可手动执行；只撤本策略委托，绝不触碰用户自有单）
+- **常驻进程**：`scripts\start_all.cmd` 同时启动看板 + 调度器；或分开启动
+  `python scripts/scheduler.py`（15:30 全流程）/ `python scripts/dashboard_watchdog.py --install`（看板守护）
 
 ### 留痕在哪看（三层）
 

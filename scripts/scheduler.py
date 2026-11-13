@@ -125,63 +125,45 @@ def step_fetch_fundamentals() -> bool:
 
 
 # ----------------------------------------------------------------------
-# 环节 3：生成信号 + PaperBroker 模拟盘
+# 环节 3：真实下单（run-paper --qmt 子进程，与手工链路完全一致）
 # ----------------------------------------------------------------------
-def step_run_signals(top_n: int = 50, lam: float = 0.5) -> bool:
-    """用最新数据跑一次策略信号，落到 PaperBroker（本地模拟盘，幂等）。"""
-    import pandas as pd
-    from backtest.engine import BacktestEngine
-    from data.fundamentals import load_fundamentals
-    from strategy.cross_asset import CrossAssetStrategy
+def step_run_signals(top_n: int = 50, lam: float = 0.5,
+                     capital: float = 1_000_000.0) -> bool:
+    """跑真实 QMT 下单链路（重放→目标持仓→差额→风控→限价委托）。
 
-    bars_dir = ROOT / "data" / "bars"
-    etf = ["518880", "513100"]
-    # 股票池：最近上市的一批标的（控制规模，200 只随机抽样即可出信号）
-    stock_codes = sorted(p.stem for p in bars_dir.glob("*.parquet")
-                         if p.stem not in ("518880", "513100"))
-    if len(stock_codes) > 200:
-        step = len(stock_codes) // 200
-        stock_codes = stock_codes[::step][:200]
+    与手工 `python main.py run-paper --qmt --lam L --top-n N --capital C` 完全一致：
+    内部自带前置撤旧单（cancel_stale）+ 结算同步（sync_settle）+ 净值留痕。
+    """
+    import subprocess
+    import sys as _sys
 
-    from data.storage import Storage
-    storage = Storage(str(DB), str(bars_dir))
-    bars = {}
-    for code in etf + stock_codes:
-        try:
-            df = storage.load_bars(code)
-            if df is not None and len(df):
-                # 只取最近 400 个交易日（信号不需要全历史）
-                bars[code] = df.tail(400).reset_index(drop=True)
-        except Exception:  # noqa: BLE001
-            continue
-    if "518880" not in bars or "513100" not in bars:
-        log.warning("[step3] ETF 数据缺失，跳过信号")
-        return True
-
-    fundamentals = load_fundamentals()
-    if fundamentals is not None and fundamentals.empty:
-        fundamentals = None
-
-    strategy = CrossAssetStrategy(lam=lam, top_n=top_n, fundamentals=fundamentals)
-    engine = BacktestEngine(strategy=strategy)
-    result = engine.run(bars)
-
-    m = result.metrics
-    log.info(f"[step3] 信号回放完成：收益 {m['total_return']:+.2%} | "
-             f"回撤 {m['max_drawdown']:.2%} | 成交 {len(result.trades)} 笔")
-    # 净值留档（Web 看板用）
-    report_dir = ROOT / "report"
-    report_dir.mkdir(exist_ok=True)
-    eq_df = result.equity.reset_index()
-    eq_df.columns = ["date", "equity"]
-    eq_df.to_csv(report_dir / "equity.csv", index=False)
-    return True
+    cmd = [_sys.executable, "main.py", "run-paper", "--qmt",
+           "--lam", str(lam), "--top-n", str(top_n), "--capital", str(int(capital))]
+    log.info(f"[step3] run-paper 启动：{' '.join(cmd[1:])}")
+    t0 = time.time()
+    r = subprocess.run(cmd, cwd=str(ROOT),
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=3600)
+    out = (r.stdout or "") + (r.stderr or "")
+    # 日志留档（每次运行独立文件，供运行中心查看）
+    log_dir = ROOT / "logs"
+    log_dir.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_log = log_dir / f"run_paper_{stamp}.log"
+    run_log.write_text(out, encoding="utf-8")
+    ok = r.returncode == 0
+    tail = [ln for ln in out.splitlines() if ln.strip()][-8:]
+    for ln in tail:
+        log.info(f"[step3] {ln}")
+    log.info(f"[step3] run-paper {'完成' if ok else '失败'}（exit={r.returncode}，"
+             f"{time.time() - t0:.0f}s，日志 {run_log.name}）")
+    return ok
 
 
 # ----------------------------------------------------------------------
 # 主流程
 # ----------------------------------------------------------------------
-def run_daily_job(top_n: int = 50, lam: float = 0.5):
+def run_daily_job(top_n: int = 50, lam: float = 0.5, capital: float = 1_000_000.0):
     """每日全流程（各环节独立 try，失败不阻断后续环节留痕）。整体登记 runs registry。"""
     from scripts.runs_registry import finish_run, start_run
 
@@ -191,10 +173,34 @@ def run_daily_job(top_n: int = 50, lam: float = 0.5):
     log.info("========== 每日任务开始 ==========")
     t0 = time.time()
     failed = False
+
+    # 防重护栏：当日已成功下过单（run_paper_qmt/daily_job）则跳过下单环节
+    # （幂等保护——同日重复触发不重复委托；撤旧单是最后防线，此处先省事）
+    from scripts.runs_registry import load_runs
+    today = datetime.now().strftime("%Y-%m-%d")
+    already = any(
+        r.get("status") == "done" and (r.get("ts_start") or "").startswith(today)
+        and r.get("key") in ("daily_job", "run_paper_qmt")
+        for r in load_runs(limit=50)
+    )
+    if already:
+        log.info("[daily] 当日已有成功下单记录，跳过下单环节（防重复委托）")
+    else:
+        steps = (
+            ("行情增量", lambda: step_fetch_recent()),
+            ("财报增量", step_fetch_fundamentals),
+            ("信号+模拟盘", lambda: step_run_signals(top_n=top_n, lam=lam,
+                                                     capital=capital)),
+        )
+        for name, fn in steps:
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001
+                failed = True
+                log.error(f"[daily] 环节「{name}」异常: {type(e).__name__} {str(e)[:120]}")
+
+    # 收尾环节始终执行（幂等）
     for name, fn in (
-        ("行情增量", lambda: step_fetch_recent()),
-        ("财报增量", step_fetch_fundamentals),
-        ("信号+模拟盘", lambda: step_run_signals(top_n=top_n, lam=lam)),
         ("实盘净值留痕", lambda: _step_paper_equity()),
         ("交易日报", lambda: _step_daily_report()),
     ):
@@ -227,8 +233,10 @@ def main():
     parser = argparse.ArgumentParser(description="每日自动化调度")
     parser.add_argument("--time", default="15:30", help="每交易日执行时刻（默认 15:30）")
     parser.add_argument("--run-now", action="store_true", help="立即执行一次")
-    parser.add_argument("--top-n", type=int, default=50)
+    parser.add_argument("--top-n", type=int, default=100)
     parser.add_argument("--lam", type=float, default=0.5)
+    parser.add_argument("--capital", type=float, default=1_000_000.0,
+                        help="目标仓位资金（100 万口径，默认 1000000）")
     parser.add_argument("--run-fetch-recent", type=int, default=0, metavar="DAYS",
                         help="只跑环节1：增量采集最近 N 日行情后退出（看板控制台用）")
     args = parser.parse_args()
@@ -238,7 +246,7 @@ def main():
         sys.exit(0 if ok else 1)
 
     if args.run_now:
-        run_daily_job(top_n=args.top_n, lam=args.lam)
+        run_daily_job(top_n=args.top_n, lam=args.lam, capital=args.capital)
         return
 
     # APScheduler 定时：交易日（周一~五）指定时刻
