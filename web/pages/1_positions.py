@@ -192,9 +192,10 @@ with tabs[0]:
             ]), unsafe_allow_html=True)
 
             # 权重环形图（A股 / 黄金 / 纳指 / 现金）
+            # A股市值 = A股类别市值（黄金/纳指已归 ETF 类别，不再扣减）
             gold_mv = df.loc[df["code"] == "518880", "市值"].sum() if (df["code"] == "518880").any() else 0.0
             nasdaq_mv = df.loc[df["code"] == "513100", "市值"].sum() if (df["code"] == "513100").any() else 0.0
-            stock_mv = max(a_mv - gold_mv - nasdaq_mv, 0.0)
+            stock_mv = a_mv  # A股类别（已不含两只 ETF）
             st.markdown(f'<div class="panel-title">{t("资产权重分布")} / ALLOCATION</div>',
                         unsafe_allow_html=True)
             st.plotly_chart(
