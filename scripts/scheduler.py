@@ -278,6 +278,11 @@ def run_premarket_job(top_n: int = 50, lam: float = 0.5,
         _step_paper_equity()
     except Exception as e:  # noqa: BLE001
         log.error(f"[premarket] 净值留痕异常: {type(e).__name__}")
+    # TSP 推送（幂等）：当日计划同步到 Tick Stock Panel 模拟盘（局域网可视化）
+    try:
+        _step_push_tsp()
+    except Exception as e:  # noqa: BLE001
+        log.error(f"[premarket] TSP 推送异常: {type(e).__name__} {str(e)[:120]}")
     log.info(f"========== 盘前任务完成（{time.time() - t0:.0f}s）==========")
     finish_run(rid, "failed" if failed else "done", None)
 
@@ -288,6 +293,14 @@ def _step_paper_equity() -> bool:
     msg = record()
     log.info(f"[step5] {msg}")
     return True
+
+
+def _step_push_tsp() -> bool:
+    """当日计划推送到 Tick Stock Panel 模拟盘（幂等，失败不影响主流程）。"""
+    from scripts.push_to_tsp import push_today
+    fails = push_today()
+    log.info(f"[tsp] 推送结果: {'成功' if fails == 0 else f'{fails} 笔失败'}")
+    return fails == 0
 
 
 def _step_sync_settle() -> bool:
