@@ -26,6 +26,7 @@ st.set_page_config(page_title="QUANT TERMINAL · 金融工作台",
 # ── 侧栏导航（st.navigation 接管：页面顺序 + i18n 标题） ──
 _PAGES: list[tuple[str, str]] = [
     ("0_console", "系统控制台"),
+    ("0b_today_plan", "今日交易计划"),
     ("1_positions", "持仓与订单"),
     ("2_backtest", "回测报告"),
     ("3_factors", "因子质检"),
@@ -40,8 +41,8 @@ _PAGES: list[tuple[str, str]] = [
 ]
 
 _icons = {
-    "0_console": "🛠", "1_positions": "◎", "2_backtest": "📋", "3_factors": "🧪",
-    "5_knowledge": "📚", "6_runs": "⚙", "7_settlement": "🧾",
+    "0_console": "🛠", "0b_today_plan": "🎯", "1_positions": "◎", "2_backtest": "📋",
+    "3_factors": "🧪", "5_knowledge": "📚", "6_runs": "⚙", "7_settlement": "🧾",
     "8_daily": "📰", "9_oneclick": "⚡", "10_market": "📈", "11_analysis": "📊",
     "12_stock_view": "🕯",
 }

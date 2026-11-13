@@ -58,7 +58,7 @@ QMT_PATH=C:\国金QMT交易端\userdata_mini
 ### 第 3 步：启动常驻服务（看板 + 每日调度）
 
 **方式 A · 一键启动（推荐）**：双击 `scripts\start_all.cmd`
-→ 看板 http://127.0.0.1:8765 + 调度器（每交易日 15:30 自动跑）
+→ 看板 http://127.0.0.1:8765 + 调度器（盘前 08:30 生成交易计划 + 盘后 15:05 数据增量）
 
 **方式 B · 开机自启（双保险守护）**：
 
@@ -67,17 +67,20 @@ python scripts/dashboard_watchdog.py --install   # 安装计划任务：开机�
 python scripts/dashboard_watchdog.py --status    # 查看运行状态
 ```
 
-### 每日自动链路（调度器 15:30 触发，全程幂等）
+### 每日自动链路（盘前/盘后两段，全程幂等）
 
 ```
-行情增量采集 → 财报增量 → run-paper --qmt（撤旧单 → 结算同步 → 策略重放 → 目标持仓
-→ 差额调仓单 → 风控 → 限价委托 QMT）→ 净值留痕 → 交易日报
+盘后 15:05（数据任务）  ：行情增量采集 → 财报增量
+盘前 08:30（策略任务）  ：run-paper --qmt（撤旧单 → 结算同步 → 策略重放 → 目标持仓
+                          → 差额调仓单 → 风控 → 限价委托 QMT）
+                          → 开盘前 Web「今日交易计划」页可查当日买卖计划
+盘后 15:40（日报）      ：净值留痕 → 交易日报
 ```
 
 - **防重复委托**：当日已有成功下单记录则跳过下单环节；run 前自动撤掉我们的在挂委托
   （`python main.py cancel-stale` 可手动执行；只撤本策略委托，绝不触碰用户自有单）
 - **常驻进程**：`scripts\start_all.cmd` 同时启动看板 + 调度器；或分开启动
-  `python scripts/scheduler.py`（15:30 全流程）/ `python scripts/dashboard_watchdog.py --install`（看板守护）
+  `python scripts/scheduler.py`（盘前 08:30 + 盘后 15:05 双任务）/ `python scripts/dashboard_watchdog.py --install`（看板守护）
 
 ### 留痕在哪看（三层）
 

@@ -87,6 +87,31 @@ def _fallback_px(code: str) -> tuple[float | None, float | None]:
     return None, None
 
 
+@st.cache_data(ttl=30)
+def _strategy_mv_qmt() -> tuple[float | None, float | None]:
+    """（策略市值, 前一日策略市值）——QMT 柜台留痕口径（paper_equity.csv）。
+
+    纯策略 100 万视角：只含管理范围内持仓市值，不含用户自有资产。
+    读最近两日留痕（无 QMT 直连，页面渲染轻量）。
+    """
+    p = ROOT / "data" / "paper_equity.csv"
+    if not p.exists():
+        return None, None
+    try:
+        df = pd.read_csv(p)
+        if "strategy_mv" not in df.columns or df.empty:
+            return None, None
+        df = df.dropna(subset=["strategy_mv"])
+        if df.empty:
+            return None, None
+        last = float(df["strategy_mv"].iloc[-1])
+        prev = (float(df["strategy_mv"].iloc[-2])
+                if len(df) >= 2 and pd.notna(df["strategy_mv"].iloc[-2]) else None)
+        return last, prev
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
 st.markdown(f"""
 <div class="page-title">◈ {t("持仓与订单")} / POSITIONS & ORDERS</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">{t("持仓 · 订单 · 成交流水 · A股 + ETF")}</div>
@@ -147,22 +172,15 @@ with tabs[0]:
             a_mv = df.loc[df["类别"] == "A股", "市值"].sum()
             e_mv = df.loc[df["类别"] == "ETF", "市值"].sum()
 
-            # 现金（accounts 表）
-            try:
-                with sqlite3.connect(str(ROOT / "data" / "quant.db")) as conn:
-                    cash = conn.execute(
-                        "SELECT cash FROM accounts ORDER BY rowid DESC LIMIT 1"
-                    ).fetchone()
-                    cash = float(cash[0]) if cash else 0.0
-            except Exception:  # noqa: BLE001
-                cash = 0.0
-
-            total_asset = total_mv + cash
+            # 策略市值（QMT 柜台口径，paper_equity 留痕）：纯策略 100 万视角，
+            # 不含用户自有资产——用户自有仓在柜台但不在管理范围，绝不触碰
+            strat_mv_qmt, strat_mv_prev = _strategy_mv_qmt()
 
             st.markdown(f'<div class="panel-title">{t("持仓概览")} / HOLDINGS</div>',
                         unsafe_allow_html=True)
             st.markdown(kpi_grid([
-                kpi_card(t("合计市值"), f"{total_mv:,.0f}", t("最新收盘价口径")),
+                kpi_card(t("策略市值"), f"{strat_mv_qmt or total_mv:,.0f}",
+                         f"QMT 柜台口径 · 纯策略仓（不含自有资产）"),
                 kpi_card(t("持仓成本"), f"{total_cost:,.0f}", f"{len(df)} 只持仓"),
                 kpi_card(t("当日涨跌"), f"{day_pnl:+,.0f}",
                          f"{'上涨' if day_pnl > 0 else '下跌'}金额",
@@ -170,7 +188,7 @@ with tabs[0]:
                 kpi_card(t("持仓盈亏"), f"{total_pnl:+,.0f}",
                          f"{(total_pnl / total_cost):+.2%}" if total_cost else "",
                          cls="kpi-up" if total_pnl > 0 else "kpi-down" if total_pnl < 0 else None),
-                kpi_card(t("总资产"), f"{total_asset:,.0f}", f"市值 + 现金 {cash:,.0f}"),
+                kpi_card(t("台账市值"), f"{total_mv:,.0f}", f"最新收盘价口径 · A股 {n_a} / ETF {n_e}"),
             ]), unsafe_allow_html=True)
 
             # 权重环形图（A股 / 黄金 / 纳指 / 现金）
@@ -181,7 +199,8 @@ with tabs[0]:
                         unsafe_allow_html=True)
             st.plotly_chart(
                 charts.asset_weight_donut(
-                    {"stock_value": stock_mv, "cash": cash}, gold_mv, nasdaq_mv),
+                    {"stock_value": stock_mv, "cash": max((strat_mv_qmt or total_mv) - total_mv, 0)},
+                    gold_mv, nasdaq_mv),
                 use_container_width=True)
         st.markdown(f'<div class="panel-title">{t("持仓明细")} / DETAIL</div>',
                     unsafe_allow_html=True)

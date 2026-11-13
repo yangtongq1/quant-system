@@ -213,6 +213,75 @@ def run_daily_job(top_n: int = 50, lam: float = 0.5, capital: float = 1_000_000.
     finish_run(rid, "failed" if failed else "done", None)
 
 
+def run_data_job():
+    """盘后数据任务（15:05）：只做行情+财报增量，不下单。
+
+    与盘前任务（run_premarket_job）拆分：收盘后尽快把当日数据补齐，
+    盘前重放才有最新因子/行情可算。
+    """
+    from scripts.runs_registry import finish_run, start_run
+
+    log_file = log.handlers[0].baseFilename if log.handlers else ""
+    rid = start_run("data_job", "盘后数据增量（行情+财报）",
+                    "scheduler data job", log_file, os.getpid())
+    log.info("========== 盘后数据任务开始 ==========")
+    t0 = time.time()
+    failed = False
+    for name, fn in (
+        ("行情增量", lambda: step_fetch_recent()),
+        ("财报增量", step_fetch_fundamentals),
+    ):
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            failed = True
+            log.error(f"[data] 环节「{name}」异常: {type(e).__name__} {str(e)[:120]}")
+    log.info(f"========== 盘后数据任务完成（{time.time() - t0:.0f}s）==========")
+    finish_run(rid, "failed" if failed else "done", None)
+
+
+def run_premarket_job(top_n: int = 50, lam: float = 0.5,
+                       capital: float = 1_000_000.0):
+    """盘前任务（08:30）：策略生成当日买卖计划 + QMT 委托。
+
+    前置依赖：昨日盘后 data_job 已把行情补齐（昨日收盘数据可算因子）。
+    用户可在开盘前（如 09:00）打开 web「今日交易计划」查看当日买卖单。
+    """
+    from scripts.runs_registry import finish_run, start_run
+
+    log_file = log.handlers[0].baseFilename if log.handlers else ""
+    rid = start_run("premarket_job", f"盘前策略生成 λ={lam} TopN={top_n}",
+                    "scheduler premarket job", log_file, os.getpid())
+    log.info("========== 盘前任务开始 ==========")
+    t0 = time.time()
+    failed = False
+
+    # 防重护栏：当日已成功下过单则跳过（同 daily_job 语义）
+    from scripts.runs_registry import load_runs
+    today = datetime.now().strftime("%Y-%m-%d")
+    already = any(
+        r.get("status") == "done" and (r.get("ts_start") or "").startswith(today)
+        and r.get("key") in ("daily_job", "run_paper_qmt", "premarket_job")
+        for r in load_runs(limit=50)
+    )
+    if already:
+        log.info("[premarket] 当日已有成功下单记录，跳过（防重复委托）")
+    else:
+        try:
+            step_run_signals(top_n=top_n, lam=lam, capital=capital)
+        except Exception as e:  # noqa: BLE001
+            failed = True
+            log.error(f"[premarket] 下单环节异常: {type(e).__name__} {str(e)[:120]}")
+
+    # 净值留痕（幂等）：盘前跑一次，把昨日收盘后的柜台状态留痕
+    try:
+        _step_paper_equity()
+    except Exception as e:  # noqa: BLE001
+        log.error(f"[premarket] 净值留痕异常: {type(e).__name__}")
+    log.info(f"========== 盘前任务完成（{time.time() - t0:.0f}s）==========")
+    finish_run(rid, "failed" if failed else "done", None)
+
+
 def _step_paper_equity() -> bool:
     """实盘净值留痕（QMT 柜台总资产 → data/paper_equity.csv，幂等）。"""
     from scripts.paper_equity import record
@@ -231,8 +300,13 @@ def _step_daily_report() -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="每日自动化调度")
-    parser.add_argument("--time", default="15:30", help="每交易日执行时刻（默认 15:30）")
-    parser.add_argument("--run-now", action="store_true", help="立即执行一次")
+    parser.add_argument("--time", default="08:30",
+                        help="盘前策略生成时刻（默认 08:30；生成当日买卖计划并 QMT 委托）")
+    parser.add_argument("--data-time", default="15:05",
+                        help="盘后数据增量时刻（默认 15:05；行情+财报补齐，不下单）")
+    parser.add_argument("--run-now", action="store_true", help="立即执行一次盘前全流程")
+    parser.add_argument("--run-data", action="store_true",
+                        help="立即执行一次盘后数据任务（行情+财报增量）")
     parser.add_argument("--top-n", type=int, default=100)
     parser.add_argument("--lam", type=float, default=0.5)
     parser.add_argument("--capital", type=float, default=1_000_000.0,
@@ -245,33 +319,66 @@ def main():
         ok = step_fetch_recent(args.run_fetch_recent)
         sys.exit(0 if ok else 1)
 
+    if args.run_data:
+        run_data_job()
+        return
+
     if args.run_now:
         run_daily_job(top_n=args.top_n, lam=args.lam, capital=args.capital)
         return
 
-    # APScheduler 定时：交易日（周一~五）指定时刻
+    # APScheduler 定时：交易日（周一~五）
     try:
         from apscheduler.schedulers.blocking import BlockingScheduler
     except ImportError:
         log.error("APScheduler 未安装：pip install apscheduler")
         sys.exit(1)
 
-    hh, mm = args.time.split(":")
+    def _mk(hhmm: str) -> tuple[int, int]:
+        hh, mm = hhmm.split(":")
+        return int(hh), int(mm)
+
+    pm_h, pm_m = _mk(args.time)
+    dm_h, dm_m = _mk(args.data_time)
     sched = BlockingScheduler()
 
-    # 交易日判断：周末不跑（节假日由 step1 幂等性天然兼容——无新数据即空跑）
+    # 盘前任务：策略生成当日买卖计划 + QMT 委托（默认 08:30）
     sched.add_job(
-        lambda: run_daily_job(top_n=args.top_n, lam=args.lam),
+        lambda: run_premarket_job(top_n=args.top_n, lam=args.lam,
+                                  capital=args.capital),
         trigger="cron",
         day_of_week="mon-fri",
-        hour=int(hh), minute=int(mm),
-        id="daily_quant_job",
+        hour=pm_h, minute=pm_m,
+        id="premarket_quant_job",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,
     )
+    # 盘后数据任务：行情+财报增量（默认 15:05，收盘后尽快补齐当日数据）
+    sched.add_job(
+        lambda: run_data_job(),
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=dm_h, minute=dm_m,
+        id="data_quant_job",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=7200,
+    )
+    # 交易日报：盘后数据补齐后生成（默认 15:40，避开数据任务运行窗口）
+    sched.add_job(
+        lambda: (_step_daily_report(), _step_paper_equity()),
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=dm_h, minute=min(dm_m + 35, 59),
+        id="daily_report_job",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=7200,
+    )
 
-    log.info(f"[scheduler] 已启动：每交易日 {args.time} 执行（Ctrl-C 停止）")
+    log.info(f"[scheduler] 已启动：盘前策略 {args.time} · 盘后数据 {args.data_time} ·"
+             f" 日报 {args.data_time}+35min（Ctrl-C 停止）")
     try:
         sched.start()
     except (KeyboardInterrupt, SystemExit):
