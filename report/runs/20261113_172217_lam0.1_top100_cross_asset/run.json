@@ -1,0 +1,20 @@
+{
+  "timestamp": "20261113_172217",
+  "strategy": "cross_asset",
+  "strategy_name": "跨资产对冲(λ并轨)",
+  "kind": "对冲",
+  "start": "20150101",
+  "end": "20261231",
+  "cash": 1000000,
+  "codes_explicit": false,
+  "n_assets": 5029,
+  "lam": 0.1,
+  "top_n": 100,
+  "rebalance_freq": "daily",
+  "n_trades": 63977,
+  "total_return": 0.46165049938899605,
+  "annual_return": 0.033793585644756874,
+  "max_drawdown": -0.308279001864461,
+  "sharpe": 0.3756431294712213,
+  "calmar": 0.10962013448977845
+}
