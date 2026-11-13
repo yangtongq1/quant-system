@@ -1,0 +1,20 @@
+{
+  "timestamp": "20261113_170616",
+  "strategy": "stock_only",
+  "strategy_name": "多因子纯股票",
+  "kind": "非对冲",
+  "start": "20150101",
+  "end": "20261231",
+  "cash": 1000000,
+  "codes_explicit": false,
+  "n_assets": 5029,
+  "lam": null,
+  "top_n": 100,
+  "rebalance_freq": "monthly",
+  "n_trades": 3871,
+  "total_return": 0.16038521665999994,
+  "annual_return": 0.01311004075333111,
+  "max_drawdown": -0.07993486571518527,
+  "sharpe": 0.42420024271474516,
+  "calmar": 0.1640090420623624
+}

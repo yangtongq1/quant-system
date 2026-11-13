@@ -155,6 +155,23 @@ def _load_bars(codes: list[str]) -> dict[str, pd.DataFrame]:
     return bars
 
 
+STRATEGY_NAMES = {
+    "dual_ma": "双均线",
+    "cross_asset": "跨资产对冲(λ并轨)",
+    "equal_weight": "等权再平衡",
+    "risk_parity": "风险平价",
+    "stock_only": "多因子纯股票",
+    "etf_momentum": "ETF动量轮动",
+}
+STRATEGY_KINDS = {
+    "cross_asset": "对冲",
+    "equal_weight": "对冲基准",
+    "risk_parity": "对冲",
+    "stock_only": "非对冲",
+    "etf_momentum": "非对冲",
+}
+
+
 def _make_strategy(args):
     if args.strategy == "dual_ma":
         from strategy.examples.dual_ma import DualMAStrategy
@@ -187,30 +204,75 @@ def _make_strategy(args):
             main_board_only=bool(strat_cfg.get("main_board_only", False)),
             exclude_st=bool(strat_cfg.get("exclude_st", True)),
             stock_meta=stock_meta,
-            rebalance_freq=str(strat_cfg.get("rebalance_freq", "monthly")),
+            # CLI 显式频率覆盖 config（--strategy all 横向对比统一用 monthly）
+            rebalance_freq=(args.rebalance_freq
+                            if getattr(args, "rebalance_freq", "")
+                            else str(strat_cfg.get("rebalance_freq", "monthly"))),
             select_refresh_days=int(strat_cfg.get("select_refresh_days", 5)),
             max_buy_2d_pct=float(CONFIG.get("risk", {}).get("max_buy_2d_pct", 0) or 0),
         )
-    print(f"[backtest] 未知策略: {args.strategy}（可选 dual_ma / cross_asset）")
+    if args.strategy in ("equal_weight", "risk_parity", "stock_only"):
+        # 多策略体系（strategy/multi.py）：继承 CrossAsset，复用选股/调仓基建
+        from strategy.multi import EqualWeightStrategy, RiskParityStrategy, StockOnlyStrategy
+        strat_cfg = CONFIG.get("strategy", {})
+        cls = {"equal_weight": EqualWeightStrategy,
+               "risk_parity": RiskParityStrategy,
+               "stock_only": StockOnlyStrategy}[args.strategy]
+
+        fundamentals = None
+        if not getattr(args, "no_fundamentals", False):
+            from data.fundamentals import load_fundamentals
+            fundamentals = load_fundamentals()
+            if fundamentals is None or fundamentals.empty:
+                fundamentals = None
+
+        from execution.paper_engine import load_stock_meta
+        stock_meta = load_stock_meta()
+
+        kw = dict(
+            top_n=args.top_n or strat_cfg.get("stock_universe", 50),
+            fundamentals=fundamentals,
+            allow_chinext=bool(strat_cfg.get("allow_chinext", True)),
+            allow_star=bool(strat_cfg.get("allow_star", True)),
+            main_board_only=bool(strat_cfg.get("main_board_only", False)),
+            exclude_st=bool(strat_cfg.get("exclude_st", True)),
+            stock_meta=stock_meta,
+            max_buy_2d_pct=float(CONFIG.get("risk", {}).get("max_buy_2d_pct", 0) or 0),
+        )
+        # 横向对比公平性：对比基准策略统一用月频（主策略日频单独跑）
+        if args.rebalance_freq:
+            kw["rebalance_freq"] = args.rebalance_freq
+        return cls(**kw)
+    if args.strategy == "etf_momentum":
+        from strategy.multi import ETFMomentumStrategy
+        return ETFMomentumStrategy()
+    print(f"[backtest] 未知策略: {args.strategy}（可选 {' / '.join(STRATEGY_NAMES)}）")
     return None
 
 
 def _backtest_codes(args) -> list[str]:
     if args.codes:
         return [c.strip() for c in args.codes.split(",") if c.strip()]
-    if args.strategy == "cross_asset":
+    strat = args.strategy if args.strategy != "all" else "cross_asset"
+    if strat in ("cross_asset", "equal_weight", "risk_parity", "stock_only"):
         # 动态股票池：全部已入库标的（指数成分股已优先采集）+ 两只 ETF
         bars_dir = ROOT / "data" / "bars"
         all_codes = sorted(p.stem for p in bars_dir.glob("*.parquet"))
         if not all_codes:
             return ["518880", "513100"]
-        pool = [c for c in all_codes if c not in ("518880", "513100")]
+        pool = [c for c in all_codes if c not in ("518880", "513100", "510300")]
         return ["518880", "513100"] + pool
+    if strat == "etf_momentum":
+        return ["518880", "513100", "510300"]
     return ["600519"]
 
 
 def cmd_backtest(args):
     from backtest.engine import BacktestEngine
+
+    if args.strategy == "all":
+        _cmd_backtest_all(args)
+        return
 
     strategy = _make_strategy(args)
     if strategy is None:
@@ -244,6 +306,104 @@ def cmd_backtest(args):
     _generate_report_files(result, title=f"{args.strategy} 回测报告")
 
 
+# 全策略一键对比（backtest --strategy all）
+ALL_STRATS = ["cross_asset", "equal_weight", "risk_parity", "stock_only", "etf_momentum"]
+
+
+def _cmd_backtest_all(args):
+    """一键跑全部策略 + 汇总横向对比表（对冲 vs 非对冲）。
+
+    每个策略独立回测 → 独立归档（report/runs/）→ 终端汇总表 +
+    report/compare/all_compare.csv + 多策略净值叠加图。
+    """
+    import time
+
+    from backtest.engine import BacktestEngine
+
+    results: dict[str, dict] = {}
+    equities: dict[str, "pd.Series"] = {}
+    for strat in ALL_STRATS:
+        t0 = time.time()
+        args.strategy = strat  # _make_strategy/_backtest_codes 按策略分流
+        # 公平对比：全部策略统一月频（主策略日频是当前生产口径，单独跑 cross_asset 查看）
+        if not getattr(args, "rebalance_freq", ""):
+            args.rebalance_freq = "monthly"
+        strategy = _make_strategy(args)
+        if strategy is None:
+            continue
+        codes = _backtest_codes(args)
+        bars = _load_bars(codes)
+        if not bars:
+            print(f"[all] {strat}: 无行情数据，跳过")
+            continue
+        print(f"\n[all] === {STRATEGY_NAMES[strat]} ({strat}) === 标的 {len(bars)} 只")
+        engine = BacktestEngine(strategy=strategy, initial_cash=args.cash)
+        result = engine.run(bars)
+        m = result.metrics
+        elapsed = time.time() - t0
+        print(f"[all] {strat}: 收益 {m['total_return']:+.2%} | 回撤 {m['max_drawdown']:.2%} | "
+              f"夏普 {m['sharpe']:.3f} | {len(result.trades)} 笔 | {elapsed:.0f}s")
+        results[strat] = {
+            "total_return": m["total_return"],
+            "annual_return": m["annual_return"],
+            "max_drawdown": m["max_drawdown"],
+            "sharpe": m["sharpe"],
+            "calmar": m["calmar"],
+            "n_trades": len(result.trades),
+        }
+        equities[strat] = result.equity
+        # 独立归档（复用 _archive_run；args.strategy 已指向当前策略）
+        eq_df = result.equity.reset_index()
+        eq_df.columns = ["date", "equity"]
+        _archive_run(args, result, eq_df)
+
+    # 归档后恢复 args（防污染后续调用）
+    args.strategy = "all"
+
+    if not results:
+        print("[all] 无结果")
+        return
+
+    # ── 终端汇总表 ──
+    print("\n" + "═" * 88)
+    print(f"{'策略':<22}{'累计收益':>10}{'年化':>9}{'最大回撤':>10}{'夏普':>8}{'卡玛':>8}{'成交':>7}")
+    print("-" * 88)
+    for strat, r in sorted(results.items(), key=lambda kv: -kv[1]["total_return"]):
+        name = f"{STRATEGY_NAMES[strat]}"
+        print(f"{name:<20}\t{r['total_return']:>9.2%}\t{r['annual_return']:>8.2%}\t"
+              f"{r['max_drawdown']:>9.2%}\t{r['sharpe']:>8.3f}\t{r['calmar']:>8.3f}\t{r['n_trades']:>7}")
+    print("═" * 88)
+
+    # ── 汇总 CSV + 叠加图（web 对比页数据源）──
+    cmp_dir = ROOT / "report" / "compare"
+    cmp_dir.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for strat in ALL_STRATS:
+        if strat not in results:
+            continue
+        r = results[strat]
+        rows.append({
+            "strategy": strat, "name": STRATEGY_NAMES[strat],
+            "kind": STRATEGY_KINDS.get(strat, ""),
+            "total_return": round(r["total_return"], 4),
+            "annual_return": round(r["annual_return"], 4),
+            "max_drawdown": round(r["max_drawdown"], 4),
+            "sharpe": round(r["sharpe"], 3),
+            "calmar": round(r["calmar"], 3),
+            "n_trades": r["n_trades"],
+        })
+    pd.DataFrame(rows).to_csv(cmp_dir / "all_compare.csv", index=False, encoding="utf-8-sig")
+    try:
+        from report.charts import plot_equity_curves
+        plot_equity_curves(
+            {STRATEGY_NAMES[s]: eq for s, eq in equities.items()},
+            out_path=cmp_dir / "all_equity.png", title="多策略净值对比（归一化）")
+    except Exception as e:  # noqa: BLE001
+        print(f"[all] 叠加图跳过: {e}")
+    print(f"[all] 对比数据: {cmp_dir / 'all_compare.csv'}")
+    print(f"[all] 净值叠加图: {cmp_dir / 'all_equity.png'}")
+
+
 def _archive_run(args, result, eq_df: pd.DataFrame) -> None:
     """归档本次回测运行：参数 + 指标 + 净值曲线 → report/runs/<时间戳>_<标签>/。
 
@@ -267,6 +427,8 @@ def _archive_run(args, result, eq_df: pd.DataFrame) -> None:
     meta = {
         "timestamp": ts,
         "strategy": args.strategy,
+        "strategy_name": STRATEGY_NAMES.get(args.strategy, args.strategy),
+        "kind": STRATEGY_KINDS.get(args.strategy, ""),
         "start": getattr(args, "start", ""),
         "end": getattr(args, "end", ""),
         "cash": getattr(args, "cash", 0),
@@ -276,7 +438,10 @@ def _archive_run(args, result, eq_df: pd.DataFrame) -> None:
                 else CONFIG.get("strategy", {}).get("lambda_risk", 0.5))
         if args.strategy == "cross_asset" else None,
         "top_n": (args.top_n or CONFIG.get("strategy", {}).get("stock_universe", 50))
-        if args.strategy == "cross_asset" else None,
+        if args.strategy in ("cross_asset", "equal_weight", "risk_parity", "stock_only") else None,
+        "rebalance_freq": getattr(args, "rebalance_freq", None) or (
+            CONFIG.get("strategy", {}).get("rebalance_freq")
+            if args.strategy == "cross_asset" else "monthly"),
         "n_trades": len(result.trades),
         "total_return": m.get("total_return"),
         "annual_return": m.get("annual_return"),
@@ -642,6 +807,7 @@ def cmd_run_paper(args):
         lam=getattr(args, "lam", None) if getattr(args, "lam", -1) >= 0 else None,
         target_capital=float(getattr(args, "capital", 0) or 0),
         current_positions=current_positions,
+        strategy=getattr(args, "paper_strategy", "cross_asset"),
     )
 
     exec_report = None
@@ -791,7 +957,10 @@ def main():
     p.set_defaults(func=cmd_fetch_batch)
 
     p = sub.add_parser("backtest")
-    p.add_argument("--strategy", default="dual_ma", choices=["dual_ma", "cross_asset"])
+    p.add_argument("--strategy", default="dual_ma",
+                   choices=["dual_ma", "cross_asset", "equal_weight", "risk_parity",
+                            "stock_only", "etf_momentum", "all"],
+                   help="策略（all = 一键跑全部并汇总对比）")
     p.add_argument("--codes", default="")
     p.add_argument("--start", default="20240101")
     p.add_argument("--end", default="20261231")
@@ -801,6 +970,9 @@ def main():
     p.add_argument("--lam", type=float, default=-1,
                    help="风险档位 λ（0.1 稳健/0.5 平衡/0.9 进取；不传则用 config.yaml 的 lambda_risk）")
     p.add_argument("--top-n", type=int, default=0)
+    p.add_argument("--rebalance-freq", default="",
+                   choices=["", "monthly", "daily"],
+                   help="调仓频率覆盖（对比基准策略默认 monthly）")
     p.add_argument("--no-fundamentals", action="store_true",
                    help="选股不注入基本面因子（纯价量模式）")
     p.set_defaults(func=cmd_backtest)
@@ -820,6 +992,11 @@ def main():
     p.add_argument("--qmt", action="store_true", help="用 QMT/miniQMT 仿真盘（xtquant，优先于 --supermind）")
     p.add_argument("--gmtrade", action="store_true",
                    help="用掘金量化仿真盘（gmtrade，免费网页注册，优先于 --qmt/--supermind；需 py310）")
+    p.add_argument("--strategy", dest="paper_strategy",
+                   default="cross_asset",
+                   choices=["cross_asset", "equal_weight", "risk_parity",
+                            "stock_only", "etf_momentum"],
+                   help="模拟盘策略（多策略体系见 strategy/multi.py）")
     p.add_argument("--top-n", type=int, default=30, help="持股数")
     p.add_argument("--lam", type=float, default=-1, help="风险档位 λ（0.1/0.5/0.9）")
     p.add_argument("--capital", type=float, default=0,

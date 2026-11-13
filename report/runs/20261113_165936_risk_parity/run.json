@@ -1,0 +1,20 @@
+{
+  "timestamp": "20261113_165936",
+  "strategy": "risk_parity",
+  "strategy_name": "风险平价",
+  "kind": "对冲",
+  "start": "20150101",
+  "end": "20261231",
+  "cash": 1000000,
+  "codes_explicit": false,
+  "n_assets": 5029,
+  "lam": null,
+  "top_n": 100,
+  "rebalance_freq": "monthly",
+  "n_trades": 6718,
+  "total_return": 1.0394864532989998,
+  "annual_return": 0.06439271374546074,
+  "max_drawdown": -0.24956187244785022,
+  "sharpe": 0.709974312916073,
+  "calmar": 0.25802304299875206
+}

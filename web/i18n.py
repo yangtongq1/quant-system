@@ -176,6 +176,7 @@ _EN: dict[str, str] = {
     "研究/模拟用途，不构成投资建议。": "For research/paper trading only. Not investment advice.",
     "系统操作台 · 数据采集 / 回测 / 因子 / 风控 / 执行 · 后台运行 + 实时日志": "Console · Data / Backtest / Factors / Risk / Execution · Background + Live Logs",
     "净值 · 回撤 · 月度热力 · λ 三档对比 · 资产K线": "Equity · Drawdown · Monthly Heatmap · λ Dials · Asset Candles",
+    "净值 · 回撤 · 多策略横向对比 · λ 三档对比 · 资产K线": "Equity · Drawdown · Strategy Comparison · λ Dials · Asset Candles",
     "持仓 · 订单 · 成交流水 · A股 + ETF": "Positions · Orders · Trades · A-Share + ETF",
     "持仓": "Positions",
     "知识库": "Knowledge Base",

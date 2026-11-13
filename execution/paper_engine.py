@@ -189,8 +189,12 @@ def run_paper_signals(
     pool_limit: int = 0,
     target_capital: float = 0.0,
     current_positions: dict[str, float] | None = None,
+    strategy: str = "cross_asset",
 ) -> dict:
     """跑一次模拟盘信号。
+
+    strategy：cross_asset（默认）/ equal_weight / risk_parity / stock_only /
+    etf_momentum（strategy/multi.py 多策略体系）。
 
     核心思路：用 BacktestEngine 把策略真实重放到最新交易日（真实资金、
     真实成交约束），期末 PaperBroker 持仓即策略当前应该持有的目标组合；
@@ -221,14 +225,18 @@ def run_paper_signals(
     top_n = top_n or strat_cfg.get("top_n", 30)
 
     # ── 1. 组池：ETF + 全市场股票池（与回测一致；pool_limit>0 仅调试用）──
-    bars_dir = ROOT / "data" / "bars"
-    stock_codes = sorted(
-        p.stem for p in bars_dir.glob("*.parquet")
-        if p.stem not in ("518880", "513100")
-    )
-    if pool_limit and len(stock_codes) > pool_limit:
-        stock_codes = stock_codes[:pool_limit]
-    codes = ["518880", "513100"] + stock_codes
+    # ETF 动量轮动只跑 3 只 ETF，无需全池
+    if strategy == "etf_momentum":
+        codes = ["518880", "513100", "510300"]
+    else:
+        bars_dir = ROOT / "data" / "bars"
+        stock_codes = sorted(
+            p.stem for p in bars_dir.glob("*.parquet")
+            if p.stem not in ("518880", "513100")
+        )
+        if pool_limit and len(stock_codes) > pool_limit:
+            stock_codes = stock_codes[:pool_limit]
+        codes = ["518880", "513100"] + stock_codes
 
     bars = {}
     for c in codes:
@@ -243,23 +251,49 @@ def run_paper_signals(
 
     # ── 2. 真实重放（共用回测引擎；broker 核心带真实资金）──
     fund = load_fundamentals()
-    strategy = CrossAssetStrategy(
-        lam=lam,
-        top_n=top_n,
-        stock_codes=[c for c in bars if c not in ("518880", "513100")],
-        fundamentals=fund,
-        allow_chinext=bool(strat_cfg.get("allow_chinext", True)),
-        allow_star=bool(strat_cfg.get("allow_star", True)),
-        main_board_only=bool(strat_cfg.get("main_board_only", False)),
-        exclude_st=bool(strat_cfg.get("exclude_st", True)),
-        stock_meta=load_stock_meta(),
-        rebalance_freq=str(strat_cfg.get("rebalance_freq", "monthly")),
-        select_refresh_days=int(strat_cfg.get("select_refresh_days", 5)),
-        max_buy_2d_pct=float(cfg.get("risk", {}).get("max_buy_2d_pct", 0) or 0),
-    )
+    if strategy == "etf_momentum":
+        from strategy.multi import ETFMomentumStrategy
+        strategy_obj = ETFMomentumStrategy()
+    else:
+        if strategy == "cross_asset":
+            strategy_obj = CrossAssetStrategy(
+                lam=lam,
+                top_n=top_n,
+                stock_codes=[c for c in bars if c not in ("518880", "513100")],
+                fundamentals=fund,
+                allow_chinext=bool(strat_cfg.get("allow_chinext", True)),
+                allow_star=bool(strat_cfg.get("allow_star", True)),
+                main_board_only=bool(strat_cfg.get("main_board_only", False)),
+                exclude_st=bool(strat_cfg.get("exclude_st", True)),
+                stock_meta=load_stock_meta(),
+                rebalance_freq=str(strat_cfg.get("rebalance_freq", "monthly")),
+                select_refresh_days=int(strat_cfg.get("select_refresh_days", 5)),
+                max_buy_2d_pct=float(cfg.get("risk", {}).get("max_buy_2d_pct", 0) or 0),
+            )
+        else:
+            # 多策略体系（strategy/multi.py）：继承 CrossAsset 基建，
+            # 自带基准权重/λ 覆写（等权 1/3、风险平价 λ=1、纯股票 stock=1）
+            from strategy.multi import (EqualWeightStrategy, RiskParityStrategy,
+                                        StockOnlyStrategy)
+            cls = {"equal_weight": EqualWeightStrategy,
+                   "risk_parity": RiskParityStrategy,
+                   "stock_only": StockOnlyStrategy}[strategy]
+            strategy_obj = cls(
+                top_n=top_n,
+                stock_codes=[c for c in bars if c not in ("518880", "513100")],
+                fundamentals=fund,
+                allow_chinext=bool(strat_cfg.get("allow_chinext", True)),
+                allow_star=bool(strat_cfg.get("allow_star", True)),
+                main_board_only=bool(strat_cfg.get("main_board_only", False)),
+                exclude_st=bool(strat_cfg.get("exclude_st", True)),
+                stock_meta=load_stock_meta(),
+                rebalance_freq=str(strat_cfg.get("rebalance_freq", "monthly")),
+                select_refresh_days=int(strat_cfg.get("select_refresh_days", 5)),
+                max_buy_2d_pct=float(cfg.get("risk", {}).get("max_buy_2d_pct", 0) or 0),
+            )
 
     paper_core = getattr(broker, "paper", None)
-    engine = BacktestEngine(strategy, broker=paper_core, initial_cash=initial_cash)
+    engine = BacktestEngine(strategy_obj, broker=paper_core, initial_cash=initial_cash)
     result = engine.run(bars)
 
     # 期末持仓 = 目标持仓

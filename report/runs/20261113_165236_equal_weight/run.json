@@ -1,0 +1,20 @@
+{
+  "timestamp": "20261113_165236",
+  "strategy": "equal_weight",
+  "strategy_name": "等权再平衡",
+  "kind": "对冲基准",
+  "start": "20150101",
+  "end": "20261231",
+  "cash": 1000000,
+  "codes_explicit": false,
+  "n_assets": 5029,
+  "lam": null,
+  "top_n": 100,
+  "rebalance_freq": "monthly",
+  "n_trades": 7669,
+  "total_return": 0.8051661039499995,
+  "annual_return": 0.05307875226604564,
+  "max_drawdown": -0.31067139466572635,
+  "sharpe": 0.537833714167784,
+  "calmar": 0.1708517526151929
+}

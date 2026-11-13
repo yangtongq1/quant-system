@@ -1,0 +1,20 @@
+{
+  "timestamp": "20261113_170618",
+  "strategy": "etf_momentum",
+  "strategy_name": "ETF动量轮动",
+  "kind": "非对冲",
+  "start": "20150101",
+  "end": "20261231",
+  "cash": 1000000,
+  "codes_explicit": false,
+  "n_assets": 3,
+  "lam": null,
+  "top_n": null,
+  "rebalance_freq": "monthly",
+  "n_trades": 95,
+  "total_return": -0.13918811434200018,
+  "annual_return": -0.013028817634920253,
+  "max_drawdown": -0.4936757941657386,
+  "sharpe": 0.012004538592795596,
+  "calmar": -0.026391445132402363
+}
