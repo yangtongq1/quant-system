@@ -99,8 +99,16 @@ def run_forever(interval: int = 30) -> None:
                     fail_streak = 0
                 else:
                     fail_streak += 1
-                    if fail_streak >= 3:
-                        log(f"端口被占但 HTTP 连续 {fail_streak} 次不健康：{who_owns_port(PORT)}")
+                    owner = who_owns_port(PORT)
+                    if fail_streak >= 6:
+                        # 僵尸进程（进程活着但 HTTP 无响应）：杀掉让它下一轮重新拉起
+                        # 2026-11-13 实案：streamlit 渲染中途卡死，进程活端口占但 000，
+                        # 只告警不处理 → 看板挂 40+ 分钟
+                        log(f"HTTP 连续 {fail_streak} 次不健康，击杀僵尸进程 {owner}，待重启")
+                        _kill_owner(owner)
+                        fail_streak = 0
+                    elif fail_streak >= 3:
+                        log(f"端口被占但 HTTP 连续 {fail_streak} 次不健康：{owner}")
             else:
                 log(f"看板未监听（占用方：{who_owns_port(PORT)}），重新拉起")
                 proc = start_dashboard() or proc
@@ -112,6 +120,24 @@ def run_forever(interval: int = 30) -> None:
         except Exception as e:  # noqa: BLE001
             log(f"守护循环异常: {type(e).__name__}: {e}")
         time.sleep(interval if port_in_use(PORT) else 10)
+
+
+def _kill_owner(owner: str) -> None:
+    """击杀占用端口的僵尸进程（owner 形如 'python.exe(PID 35376)'）。"""
+    import re as _re
+    m = _re.search(r"PID (\d+)", owner or "")
+    if not m:
+        return
+    pid = int(m.group(1))
+    if pid <= 4:
+        return  # 系统进程保护
+    try:
+        import subprocess as _sp
+        r = _sp.run(["taskkill", "/F", "/PID", str(pid)],
+                    capture_output=True, timeout=15)
+        log(f"taskkill PID {pid}: {'成功' if r.returncode == 0 else '失败'}")
+    except Exception as e:  # noqa: BLE001
+        log(f"击杀 PID {pid} 异常: {type(e).__name__}: {e}")
 
 
 # ---- 自持久化：注册表 HKCU Run 键（登录自启；schtasks 被安全策略拉黑时的替代） ----
