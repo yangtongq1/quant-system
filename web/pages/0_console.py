@@ -14,10 +14,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from web.theme import ACCENT, DOWN, TEXT_DIM, UP, inject_css
-from web.i18n import lang_selector, t
+from web.i18n import t
 
 st.set_page_config(page_title="系统控制台 · QUANT TERMINAL", layout="wide")
-lang_selector()
 st.markdown(inject_css(), unsafe_allow_html=True)
 
 st.markdown(f"""
@@ -27,9 +26,11 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 
-# ── 后台任务执行器（会话级状态）──────────────────────────────
+# ── 后台任务执行器（会话级状态 + 持久留痕 registry）──────────────
 def start_task(key: str, cmd: list[str], label: str) -> None:
-    """启动后台任务：记入 session_state，日志写 logs/console_<key>.log"""
+    """启动后台任务：记入 session_state，日志写 logs/console_<key>.log，持久留痕到 registry"""
+    from scripts.runs_registry import start_run
+
     log_file = ROOT / "logs" / f"console_{key}.log"
     log_file.parent.mkdir(exist_ok=True)
     proc = subprocess.Popen(
@@ -39,9 +40,10 @@ def start_task(key: str, cmd: list[str], label: str) -> None:
         stderr=subprocess.STDOUT,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+    rid = start_run(key, label, " ".join(cmd), str(log_file), proc.pid)
     st.session_state[f"task_{key}"] = {
         "pid": proc.pid, "label": label, "cmd": " ".join(cmd),
-        "log": str(log_file), "done": False,
+        "log": str(log_file), "done": False, "rid": rid,
     }
 
 
@@ -50,7 +52,9 @@ def task_status(key: str) -> dict | None:
 
 
 def poll_task(key: str) -> dict | None:
-    """检查任务是否结束（通过 pid 是否存活），返回状态字典"""
+    """检查任务是否结束（通过 pid 是否存活），返回状态字典；结束时回写 registry 终态"""
+    from scripts.runs_registry import finish_run
+
     t = st.session_state.get(f"task_{key}")
     if t is None:
         return None
@@ -60,12 +64,21 @@ def poll_task(key: str) -> dict | None:
             import psutil
             alive = psutil.pid_exists(t["pid"])
         except ImportError:
-            p = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {t['pid']}"],
-                capture_output=True, text=True)
-            alive = str(t["pid"]) in (p.stdout or "")
+            # tasklist 输出为 GBK，用 bytes 匹配防解码线程崩
+            p = subprocess.run(["tasklist", "/FI", f"PID eq {t['pid']}"],
+                               capture_output=True, timeout=10)
+            alive = str(t["pid"]).encode() in p.stdout
         if not alive:
             t["done"] = True
+            # 持久留痕：回写终态（日志尾部含 Traceback → failed，否则 done）
+            if t.get("rid"):
+                try:
+                    tail = Path(t["log"]).read_text(encoding="utf-8",
+                                                    errors="replace")[-4000:]
+                    failed = "Traceback (most recent call last)" in tail
+                except OSError:
+                    failed = True
+                finish_run(t["rid"], "failed" if failed else "done", None)
     return t
 
 
@@ -255,6 +268,41 @@ with q_c2:
                     "--top-n", str(int(p_top))],
                    f"模拟盘（QMT）λ={p_lam} TopN={p_top}")
 show_task("run_paper_qmt")
+
+st.divider()
+st.markdown('<div class="panel-title">RECENT RUNS / 最近运行留痕</div>', unsafe_allow_html=True)
+try:
+    from scripts.runs_registry import load_runs
+    recent = load_runs(limit=8)
+    if recent:
+        badge = {
+            "done": '<span style="color:#4ADE80;">✓ done</span>',
+            "failed": '<span style="color:#F87171;">✗ failed</span>',
+            "running": '<span class="live-dot green"></span>running',
+            "aborted": '<span style="color:#FBBF24;">− aborted</span>',
+        }
+        trs = []
+        for r in recent:
+            dur = "-" if r.get("duration_s") is None else f"{r['duration_s']:.0f}s"
+            trs.append(
+                f"<tr><td>{r['ts_start']}</td>"
+                f"<td>{r.get('label', r.get('key', '-'))}</td>"
+                f"<td>{badge.get(r.get('status'), r.get('status'))}</td>"
+                f"<td>{dur}</td>"
+                f"<td class='mono' style='font-size:11px;'>{(r.get('cmd') or '')[:80]}</td></tr>"
+            )
+        st.markdown(f"""
+        <table class="data-table">
+            <thead><tr><th>开始时间</th><th>任务</th><th>状态</th><th>耗时</th><th>命令</th></tr></thead>
+            <tbody>{''.join(trs)}</tbody>
+        </table>
+        <div style="color:{TEXT_DIM}; font-size:11px; margin-top:6px;">
+            全部留痕见「运行中心」页 · 持久记录 data/console_runs.json</div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("暂无运行留痕。点击上方任意按钮运行后自动记录。")
+except Exception as e:  # noqa: BLE001
+    st.warning(f"留痕读取异常：{e}")
 
 st.divider()
 st.markdown(f"""

@@ -2,7 +2,7 @@
 
 用法：
     from web.i18n import lang_selector, t
-    lang_selector()               # 侧栏顶部渲染语言切换器
+    lang_selector()               # 右上角单按钮循环切换（app.py 全局渲染一次）
     st.markdown(t("持仓概览"))     # 取当前语言文案（中文键 → 中/英文值）
 """
 from __future__ import annotations
@@ -198,16 +198,30 @@ _EN: dict[str, str] = {
 }
 
 
-def lang_selector(where: str = "sidebar") -> str:
-    """渲染语言切换器（sidebar 或 main）。返回当前语言 'zh'/'en'。"""
-    options = {"中文": "zh", "EN": "en"}
-    labels = list(options)
-    default = 0 if st.session_state.get("lang", "zh") == "zh" else 1
-    holder = st.sidebar if where == "sidebar" else st
-    pick = holder.selectbox("🌐 Language / 语言", labels, index=default,
-                            label_visibility="collapsed")
-    st.session_state["lang"] = options[pick]
-    return st.session_state["lang"]
+def lang_selector(where: str = "top") -> str:
+    """渲染语言切换器（右上角单按钮，点击在 中/EN 间循环切换）。
+
+    返回当前语言 'zh'/'en'。where 参数保留向后兼容：
+    - "top"（默认）：主内容区右上角单按钮
+    - "sidebar"：侧栏右上角单按钮
+    """
+    cur = st.session_state.get("lang", "zh")
+    nxt = "en" if cur == "zh" else "zh"
+    # 按钮文案显示「将要切换到的语言」：中文界面显示 EN，英文界面显示 中文
+    label = "🌐 EN" if cur == "zh" else "🌐 中文"
+    if where == "sidebar":
+        holder = st.sidebar
+        if holder.button(label, key="lang_toggle_sb", use_container_width=True):
+            st.session_state["lang"] = nxt
+            st.rerun()
+    else:
+        # 单列布局把按钮推到最右侧（视觉右上角）
+        holder = st.columns([1, 0.11])[1]
+        with holder:
+            if st.button(label, key="lang_toggle", use_container_width=True):
+                st.session_state["lang"] = nxt
+                st.rerun()
+    return st.session_state.get("lang", "zh")
 
 
 def t(zh: str) -> str:

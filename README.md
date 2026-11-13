@@ -24,7 +24,67 @@ quant-system/
 └── tests/                     # 58 个单元测试
 ```
 
-## 二、快速开始
+## 二、开箱即用（git clone 后三步跑起来）
+
+> 目标：拉取镜像 → 配置 → 每个交易日自动跑策略，全程留痕可查。
+
+### 第 1 步：安装依赖 + 首次数据初始化
+
+```bash
+git clone https://github.com/yangtongq1/quant-system.git
+cd quant-system
+pip install -r requirements.txt
+
+# 一次性初始化（全市场约 4.5 小时，支持断点续传，重复执行会跳过已完成的）
+python main.py fetch-list                                  # 股票列表(含退市)+交易日历
+python main.py fetch-etf --code 518880 --start 20150101    # 黄金ETF
+python main.py fetch-etf --code 513100 --start 20150101   # 纳指ETF
+python scripts/fetch_universe.py                           # 全市场日线(5195只)
+python scripts/fetch_fundamentals.py                       # 财报数据
+```
+
+### 第 2 步：配置通道（可选，不配则用本地模拟盘）
+
+在项目根目录建 `.env`（QMT 模拟盘通道，推荐）：
+
+```
+QMT_ACCOUNT=你的模拟资金账号
+QMT_PATH=C:\国金QMT交易端\userdata_mini
+```
+
+- QMT：券商开通 miniQMT 权限（免费），客户端保持登录。未配置时自动回退本地 PaperBroker。
+- SuperMind 同理：`SUPERMIND_ACCOUNT=模拟资金账号`。
+
+### 第 3 步：启动常驻服务（看板 + 每日调度）
+
+**方式 A · 一键启动（推荐）**：双击 `scripts\start_all.cmd`
+→ 看板 http://127.0.0.1:8765 + 调度器（每交易日 15:30 自动跑）
+
+**方式 B · 开机自启（双保险守护）**：
+
+```bash
+python scripts/dashboard_watchdog.py --install   # 安装计划任务：开机自动拉起看板守护
+python scripts/dashboard_watchdog.py --status    # 查看运行状态
+```
+
+### 每日自动链路（调度器 15:30 触发，全程幂等）
+
+```
+行情增量采集 → 财报增量 → 策略信号生成 → 模拟盘委托(QMT) → 净值留痕 → 交易日报
+```
+
+### 留痕在哪看（三层）
+
+| 层 | 位置 | 内容 |
+|---|---|---|
+| 执行留痕 | Web「运行中心」页 / `data/console_runs.json` | 面板按钮+每日调度的每一次执行（时间/状态/耗时/日志） |
+| 委托留痕 | Web「持仓与订单」页 / SQLite orders 表 | 每笔委托与成交 |
+| 净值留痕 | Web「绩效分析」页 / `data/paper_equity.csv` | 策略市值逐日曲线（100 万仓位口径，2026-11-12 起） |
+
+Web「系统控制台」页可手动触发任意环节（回测/因子质检/模拟盘信号/增量采集），同样自动留痕；
+右上角 🌐 按钮一键切换中英文。
+
+## 三、快速开始（手动逐环节）
 
 ```bash
 cd quant-system
@@ -58,7 +118,7 @@ streamlit run web/app.py                                          # http://local
 python -m pytest tests/ -q                                        # 58 passed
 ```
 
-## 三、核心策略：跨资产对冲配置
+## 四、核心策略：跨资产对冲配置
 
 **定位**：用低相关资产（黄金、纳指）对 A 股系统性风险做分散/对冲（非 Beta 中性，不做期货）。
 
@@ -81,14 +141,14 @@ python -m pytest tests/ -q                                        # 58 passed
 
 再平衡：每月末检查，任一资产偏离 >5% 触发，只调超出阈值部分（控换手成本）。
 
-## 四、风控（三层，独立于策略强制执行）
+## 五、风控（三层，独立于策略强制执行）
 
 - **事前**：单标的/单笔上限、资金校验、价格偏离拦截（乌龙指防护）→ 不过直接拒绝
 - **事中**：敞口监控、单日订单频率拦截
 - **事后**：回撤复盘、事件 append-only 留痕
 - **压力测试**：2015 股灾/2018 贸易战/2020 疫情/2024 微盘股危机情景回放 + 对冲失效测试（三资产危机相关性突变检测）
 
-## 五、开发红线（实现已全部遵守）
+## 六、开发红线（实现已全部遵守）
 
 1. **无未来函数**：信号 T 日收盘产生，T+1 开盘成交（引擎级保证，测试覆盖）
 2. **无幸存者偏差**：股票列表含退市股
@@ -101,7 +161,7 @@ python -m pytest tests/ -q                                        # 58 passed
 9. **数据不得编造**：取不到报「未覆盖」
 10. **风控独立**：BrokerAdapter 之前强制校验
 
-## 六、SuperMind 模拟盘接入（用户侧步骤）
+## 七、SuperMind 模拟盘接入（用户侧步骤）
 
 1. 下载 SuperMind 体验版（官方 quant.10jqka.com.cn）
 2. 同花顺账号登录客户端
@@ -109,14 +169,14 @@ python -m pytest tests/ -q                                        # 58 passed
 4. 设置环境变量 `SUPERMIND_ACCOUNT=模拟资金账号`，保持客户端登录
 5. SDK 未装时系统自动 DryRun（订单入本地库不发真实委托）
 
-## 七、知识板块
+## 八、知识板块
 
 - RSS 免费源聚合（`knowledge/sources.yaml` 可增删）
 - LLM 中文翻译+摘要（环境变量 `ZHIPU_API_KEY`，未配置自动跳过）
 - SQLite FTS5 全文检索（中英文标题/摘要）
 - Web 看板「知识库」页检索浏览
 
-## 八、关键约定
+## 九、关键约定
 
 - 标的代码：A 股 6 位（`600519`）；黄金 `518880`；纳指 `513100`/`159941`
 - 日频，年化 252；默认基准权重 6:2:2；λ 默认 0.5

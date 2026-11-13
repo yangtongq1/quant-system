@@ -17,10 +17,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from web import charts
-from web.i18n import lang_selector, t
+from web.i18n import t
 from web.theme import ACCENT, DOWN, GOLD, TEXT_DIM, UP, inject_css, kpi_card, kpi_grid
 
-lang_selector()
 st.set_page_config(page_title="个股K线 · QUANT TERMINAL", layout="wide")
 st.markdown(inject_css(), unsafe_allow_html=True)
 

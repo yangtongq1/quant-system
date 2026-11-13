@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 import time
@@ -181,9 +182,15 @@ def step_run_signals(top_n: int = 50, lam: float = 0.5) -> bool:
 # 主流程
 # ----------------------------------------------------------------------
 def run_daily_job(top_n: int = 50, lam: float = 0.5):
-    """每日全流程（各环节独立 try，失败不阻断后续环节留痕）。"""
+    """每日全流程（各环节独立 try，失败不阻断后续环节留痕）。整体登记 runs registry。"""
+    from scripts.runs_registry import finish_run, start_run
+
+    log_file = log.handlers[0].baseFilename if log.handlers else ""
+    rid = start_run("daily_job", f"每日全流程 λ={lam} TopN={top_n}",
+                    "scheduler daily job", log_file, os.getpid())
     log.info("========== 每日任务开始 ==========")
     t0 = time.time()
+    failed = False
     for name, fn in (
         ("行情增量", lambda: step_fetch_recent()),
         ("财报增量", step_fetch_fundamentals),
@@ -194,8 +201,10 @@ def run_daily_job(top_n: int = 50, lam: float = 0.5):
         try:
             fn()
         except Exception as e:  # noqa: BLE001
+            failed = True
             log.error(f"[daily] 环节「{name}」异常: {type(e).__name__} {str(e)[:120]}")
     log.info(f"========== 每日任务完成（{time.time() - t0:.0f}s）==========")
+    finish_run(rid, "failed" if failed else "done", None)
 
 
 def _step_paper_equity() -> bool:

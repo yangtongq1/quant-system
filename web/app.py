@@ -63,8 +63,7 @@ def build_nav() -> None:
         for fname, title in _PAGES
     ]
     pg = st.navigation(pages, position="sidebar", expanded=False)
-    # 侧栏顶部：品牌 + 语言切换（i18n.lang_selector 渲染在 sidebar）
-    from web.i18n import lang_selector
+    # 侧栏顶部：品牌标识
     with st.sidebar:
         st.markdown(
             f'<div style="font-size:15px; font-weight:800; letter-spacing:.05em; '
@@ -73,7 +72,9 @@ def build_nav() -> None:
             f'<div style="font-size:11px; color:{TEXT_DIM}; '
             f'padding-bottom:8px;">{t("跨资产对冲配置")}</div>',
             unsafe_allow_html=True)
-        lang_selector("sidebar")
+    # 右上角语言切换（单按钮循环切换，渲染在每页内容顶部右侧）
+    from web.i18n import lang_selector
+    lang_selector("top")
     pg.run()
 
 

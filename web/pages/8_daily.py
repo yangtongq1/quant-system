@@ -9,11 +9,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from web.i18n import lang_selector, t
+from web.i18n import t
 from web.theme import TEXT_DIM, inject_css
 
 st.set_page_config(page_title="交易日报 · QUANT TERMINAL", layout="wide")
-lang_selector()
 st.markdown(inject_css(), unsafe_allow_html=True)
 
 st.markdown(f"""

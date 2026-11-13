@@ -1,4 +1,9 @@
-"""运行中心页：所有回测运行归档（report/runs/）——数据跑过的痕迹都在这"""
+"""运行中心页：执行留痕（console/scheduler 全部运行）+ 回测运行归档
+
+两块内容：
+  1. 执行留痕：data/console_runs.json —— 面板按钮与每日调度的每一次执行
+  2. 回测归档：report/runs/ —— 每次回测的参数/指标/净值
+"""
 import json
 import sys
 from pathlib import Path
@@ -9,18 +14,82 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from web.theme import ACCENT, TEXT_DIM, inject_css
-from web.i18n import lang_selector, t
+from web.theme import ACCENT, DOWN, TEXT_DIM, UP, inject_css
+from web.i18n import t
 
 st.set_page_config(page_title="运行中心 · QUANT TERMINAL", layout="wide")
-lang_selector()
 st.markdown(inject_css(), unsafe_allow_html=True)
 
 st.markdown(f"""
 <div class="page-title">◈ {t("运行中心")} / RUN CENTER</div>
 <div style="color:{TEXT_DIM}; font-size:12px; margin-bottom:10px;">
-    回测运行归档 · 每次运行自动留痕（参数/指标/净值）· 目录 report/runs/</div>
+    执行留痕（面板按钮 + 每日调度）· 回测归档（report/runs/）· 全量可追溯</div>
 """, unsafe_allow_html=True)
+
+
+# ══════════════════ 第一区：执行留痕（runs registry）══════════════════
+st.markdown('<div class="panel-title">EXECUTION LOG / 执行留痕</div>',
+            unsafe_allow_html=True)
+try:
+    from scripts.runs_registry import load_runs, stats
+    stats_info = stats()
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("累计运行", stats_info["total"])
+    k2.metric("今日运行", stats_info["today"])
+    k3.metric("今日成功", stats_info["today_done"])
+    k4.metric("今日失败", stats_info["today_failed"])
+    k5.metric("进行中", stats_info["running"])
+    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+
+    runs = load_runs(limit=200)
+    if not runs:
+        st.info("暂无执行留痕。控制台运行任务或调度器每日执行后自动记录。")
+    else:
+        badge = {
+            "done": '<span style="color:#4ADE80;">✓ done</span>',
+            "failed": '<span style="color:#F87171;">✗ failed</span>',
+            "running": '<span class="live-dot green"></span>running',
+            "aborted": '<span style="color:#FBBF24;">− aborted</span>',
+        }
+        trs = []
+        for r in runs:
+            dur = "-" if r.get("duration_s") is None else f"{r['duration_s']:.0f}s"
+            st_badge = badge.get(r.get("status"), r.get("status"))
+            trs.append(
+                f"<tr><td>{r['ts_start']}</td>"
+                f"<td>{r.get('label', r.get('key', '-'))}</td>"
+                f"<td>{st_badge}</td>"
+                f"<td>{dur}</td>"
+                f"<td class='mono' style='font-size:11px;'>{(r.get('cmd') or '')[:70]}</td></tr>"
+            )
+        st.markdown(f"""
+        <table class="data-table">
+            <thead><tr><th>开始时间</th><th>任务</th><th>状态</th><th>耗时</th><th>命令</th></tr></thead>
+            <tbody>{''.join(trs)}</tbody>
+        </table>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
+        labels = [f"{r['ts_start']} · {r.get('label', r.get('key'))}" for r in runs[:50]]
+        sel = st.selectbox("查看运行日志", labels, index=0, key="log_pick")
+        if sel:
+            pick = runs[:50][labels.index(sel)]
+            log_path = Path(pick.get("log") or "")
+            if log_path.exists():
+                with st.expander(f"日志 · {log_path.name}", expanded=False):
+                    st.code(log_path.read_text(encoding="utf-8",
+                                              errors="replace")[-6000:], language="log")
+            else:
+                st.caption(f"日志文件不存在：{log_path}")
+except Exception as e:  # noqa: BLE001
+    st.warning(f"执行留痕读取异常：{e}")
+
+st.divider()
+
+
+# ══════════════════ 第二区：回测归档（report/runs/）══════════════════
+st.markdown('<div class="panel-title">BACKTEST ARCHIVE / 回测归档</div>',
+            unsafe_allow_html=True)
 
 
 @st.cache_data(ttl=30)
@@ -45,7 +114,7 @@ def load_runs() -> list[dict]:
 
 runs = load_runs()
 if not runs:
-    st.info("暂无运行归档。运行 python main.py backtest ... 后自动留痕到 report/runs/。")
+    st.info("暂无回测归档。运行 python main.py backtest ... 后自动留痕到 report/runs/。")
     st.stop()
 
 

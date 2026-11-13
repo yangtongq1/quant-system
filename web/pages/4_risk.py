@@ -11,10 +11,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from web.theme import ACCENT, TEXT_DIM, inject_css, kpi_card, kpi_grid
-from web.i18n import lang_selector, t
+from web.i18n import t
 
 st.set_page_config(page_title="风控状态 · QUANT TERMINAL", layout="wide")
-lang_selector()
 st.markdown(inject_css(), unsafe_allow_html=True)
 
 from web.charts import correlation_gauge
