@@ -290,6 +290,23 @@ def _step_paper_equity() -> bool:
     return True
 
 
+def _step_sync_settle() -> bool:
+    """结算同步：柜台终态对齐台账 + 订单状态回写（批次撮合延迟后必跑）。
+
+    东莞柜台批次撮合延迟 30-50 分钟：run-paper 委托时的「执行后对齐」拿到
+    的是旧快照，成交陆陆续续到账后无人再同步 → 台账停旧、持仓页看不到
+    当日买入。本环节在每日收尾任务跑一次，当日成交自动落台账。
+    """
+    try:
+        from scripts.sync_settle import sync
+        sync(verbose=False)
+        log.info("[sync] 结算同步完成（柜台终态已对齐台账）")
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.error(f"[sync] 结算同步异常: {type(e).__name__} {str(e)[:120]}")
+        return False
+
+
 def _step_daily_report() -> bool:
     """交易日报（report/daily/YYYY-MM-DD.md）。"""
     from scripts.daily_report import generate
@@ -365,9 +382,22 @@ def main():
         coalesce=True,
         misfire_grace_time=7200,
     )
-    # 交易日报：盘后数据补齐后生成（默认 15:40，避开数据任务运行窗口）
+    # 盘中对齐任务：11:35 / 14:35 两次结算同步（盘前委托的成交陆续回来，
+    # 台账及时对齐柜台——批次撮合延迟 30-50 分钟，2 个时点足够收敛）
     sched.add_job(
-        lambda: (_step_daily_report(), _step_paper_equity()),
+        lambda: _step_sync_settle(),
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour="11,14", minute=35,
+        id="midday_sync_job",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    # 交易日报：盘后数据补齐后生成（默认 15:40，避开数据任务运行窗口）
+    # 结算同步前置：当日批次撮合成交落台账（持仓页当天可见当日买入）
+    sched.add_job(
+        lambda: (_step_sync_settle(), _step_daily_report(), _step_paper_equity()),
         trigger="cron",
         day_of_week="mon-fri",
         hour=dm_h, minute=min(dm_m + 35, 59),
